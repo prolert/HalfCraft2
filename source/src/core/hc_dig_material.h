@@ -5,7 +5,9 @@
 // world brush's face carries to say so (core/hc_collision_shapes.h: PRIM_DIGGABLE and the material in bits 8-15).
 // pure code, no engine and no link.
 
+#include <array>
 #include <cstdint>
+#include <vector>
 
 #include "hc_collision_shapes.h"
 
@@ -45,6 +47,26 @@ namespace halfcraft
 		case 'Y': return DIG_GLASS;
 		default: return DIG_STONE;
 		}
+	}
+
+	/// what a whole brush digs as (its cut faces, and its sides without a material of their own): its sides' votes.
+	/// @param sides - each side's material, DIG_NONE for a side that doesn't vote
+	/// @return the material most sides vote for, on a tie the one voted for first; stone when none votes
+	inline std::uint8_t brush_material(const std::vector<std::uint8_t>& sides)
+	{
+		std::array<int, 256> votes{};
+		for (const std::uint8_t side : sides) {
+			++votes[side];
+		}
+		std::uint8_t material = DIG_STONE;
+		int          most = 0;
+		for (const std::uint8_t side : sides) {
+			if (side != DIG_NONE && votes[side] > most) {
+				material = side;
+				most = votes[side];
+			}
+		}
+		return material;
 	}
 
 	/// the flags of a diggable face of that material: PRIM_DIGGABLE and the material in bits 8-15

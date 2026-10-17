@@ -291,6 +291,16 @@ namespace
 		CHECK(dig_flags(DIG_GLASS) == 0x604u);
 	}
 
+	void test_brush_material()
+	{
+		CHECK(brush_material({}) == DIG_STONE);
+		CHECK(brush_material({ DIG_NONE, DIG_NONE }) == DIG_STONE);
+		CHECK(brush_material({ DIG_NONE, DIG_DIRT }) == DIG_DIRT);
+		CHECK(brush_material({ DIG_PLANKS, DIG_NONE, DIG_STONE, DIG_PLANKS }) == DIG_PLANKS);
+		CHECK(brush_material({ DIG_GLASS, DIG_IRON, DIG_IRON, DIG_GLASS }) == DIG_GLASS);  // a tie: the first
+		CHECK(brush_material({ DIG_NONE, DIG_IRON, DIG_GLASS, DIG_GLASS, DIG_IRON }) == DIG_IRON);
+	}
+
 	void test_merge_cells_makes_boxes()
 	{
 		std::vector<DigBox> boxes;
@@ -744,6 +754,7 @@ int run_tests()
 	test_face_flags_take_the_planes_material();
 	test_triangulate_gives_each_face_its_flags();
 	test_dig_material_maps_surface_materials();
+	test_brush_material();
 	test_merge_cells_makes_boxes();
 	test_subtract_boxes_cuts_the_cells_voxels();
 	test_subtract_boxes_flags_the_cut_faces();
