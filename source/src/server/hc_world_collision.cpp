@@ -36,6 +36,13 @@ namespace halfcraft
 		constexpr float MOVED_DEGREES = 0.5f;
 		// what source's player movement collides with (MASK_PLAYERSOLID without monsters: no brush is one)
 		constexpr int PLAYER_SOLID_BRUSHES = CONTENTS_SOLID | CONTENTS_MOVEABLE | CONTENTS_PLAYERCLIP | CONTENTS_WINDOW | CONTENTS_GRATE;
+		constexpr int DIGGABLE_BRUSHES = CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE;  // what minecraft may dig (not player clips)
+		// a brush side's material is what a trace through its middle, from this far out to this far in, hits, unless
+		// that surface draws nothing
+		constexpr int   UNSEEN_SURFACES = SURF_NODRAW | SURF_SKY | SURF_SKY2D;
+		constexpr float SIDE_PROBE_UNITS = 1.0f;
+		// a hit's plane facing this close to a side's way is that side
+		constexpr float SAME_NORMAL = 0.99f;
 		// a brush side whose normal points down at least this much is seen from under the brush
 		constexpr float FACING_DOWN = -0.7f;
 
@@ -91,6 +98,27 @@ namespace halfcraft
 			}
 			log_info("sky: %d of %s's %zu brushes are its sky", count, path.c_str(), brushes.size());
 			return sky;
+		}
+
+		/// a brush side's dig material: what a trace through its centre hits, the surfaceprop's game material (what bullets
+		/// and footsteps get there).
+		/// @param centre - a point on the side, source coords
+		/// @param normal - the side's, out of the brush
+		/// @return DIG_NONE: no clean hit (the trace starts in a brush, misses, hits another plane or a surface that draws
+		///         nothing, or the surface has no surfaceprop)
+		std::uint8_t side_material(const Vector& centre, const Vector& normal)
+		{
+			Ray_t ray;
+			ray.Init(centre + normal * SIDE_PROBE_UNITS, centre - normal * SIDE_PROBE_UNITS);
+			CTraceFilterWorldOnly filter;
+			trace_t               tr;
+			enginetrace->TraceRay(ray, DIGGABLE_BRUSHES, &filter, &tr);
+			if (tr.startsolid || tr.fraction >= 1.0f || DotProduct(tr.plane.normal, normal) < SAME_NORMAL || (tr.surface.flags & UNSEEN_SURFACES) != 0 ||
+				tr.surface.surfaceProps < 0) {
+				return DIG_NONE;
+			}
+			const surfacedata_t* data = physprops->GetSurfaceData(tr.surface.surfaceProps);
+			return data ? dig_material(static_cast<char>(data->game.material)) : DIG_NONE;
 		}
 
 		// read_bsp_tree's records are the file's (bspfile.h)
@@ -365,6 +393,7 @@ namespace halfcraft
 		hulls_.clear();
 		movers_.clear();
 		sky_brushes_ = map_name ? read_sky_brushes(map_name) : std::vector<bool>();
+		brush_dig_.clear();
 		bsp_ = map_name ? read_void_tree(map_name) : nullptr;
 	}
 
@@ -403,7 +432,7 @@ namespace halfcraft
 		add_entities(mins, maxs, out);
 	}
 
-	void WorldCollision::add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out) const
+	void WorldCollision::add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out)
 	{
 		CUtlVector<int> brushes;
 		enginetrace->GetBrushesInAABB(mins, maxs, &brushes, PLAYER_SOLID_BRUSHES);
@@ -422,11 +451,135 @@ namespace halfcraft
 			}
 			ColPrimitives::Convex cvx;
 			brush_to_convex(brush.data(), brush.size(), box_mins, box_maxs, slot_, cvx);
-			if (brushes[i] >= 0 && static_cast<std::size_t>(brushes[i]) < sky_brushes_.size() && sky_brushes_[brushes[i]]) {
+			if (sky_brush(brushes[i])) {
 				cvx.flags |= PRIM_SKY;
+			} else if (diggable(brushes[i], contents)) {
+				// each face digs as its side does
+				const BrushDig& dig = brush_dig(brushes[i], planes);
+				cvx.flags |= PRIM_DIGGABLE;
+				for (std::size_t p = 0; p < cvx.planes.size(); ++p) {
+					cvx.plane_flags.push_back(dig_flags(dig.sides.size() == cvx.planes.size() ? dig.sides[p] : dig.material));
+				}
 			}
 			out.convexes.push_back(std::move(cvx));
 		}
+	}
+
+	bool WorldCollision::sky_brush(int brush) const
+	{
+		return brush >= 0 && static_cast<std::size_t>(brush) < sky_brushes_.size() && sky_brushes_[brush];
+	}
+
+	bool WorldCollision::diggable(int brush, int contents) const
+	{
+		return (contents & DIGGABLE_BRUSHES) != 0 && !sky_brush(brush);
+	}
+
+	const WorldCollision::BrushDig& WorldCollision::brush_dig(int brush, const CUtlVector<Vector4D>& planes)
+	{
+		const auto it = brush_dig_.find(brush);
+		if (it != brush_dig_.end()) {
+			return it->second;
+		}
+		// the whole brush, whatever box it was gathered in: its sides' faces whole
+		std::vector<std::array<float, 4>> brush_planes;
+		brush_planes.reserve(static_cast<std::size_t>(planes.Count()));
+		for (int p = 0; p < planes.Count(); ++p) {
+			brush_planes.push_back({ planes[p].x, planes[p].y, planes[p].z, planes[p].w });
+		}
+		const float           world_mins[3] = { MIN_COORD_FLOAT, MIN_COORD_FLOAT, MIN_COORD_FLOAT };
+		const float           world_maxs[3] = { MAX_COORD_FLOAT, MAX_COORD_FLOAT, MAX_COORD_FLOAT };
+		ColPrimitives::Convex probe;
+		brush_to_convex(brush_planes.data(), brush_planes.size(), world_mins, world_maxs, MapSlot{}, probe);
+
+		// each side votes with what a trace through the middle of its face hits
+		std::vector<std::uint8_t>         votes;
+		std::vector<std::array<float, 3>> poly;
+		for (int p = 0; p < planes.Count(); ++p) {
+			std::uint8_t vote = DIG_NONE;
+			if (convex_face(probe, static_cast<std::size_t>(p), poly)) {
+				double middle[3] = { 0.0, 0.0, 0.0 };
+				for (const auto& corner : poly) {
+					for (int k = 0; k < 3; ++k) {
+						middle[k] += corner[k];
+					}
+				}
+				const double corners = static_cast<double>(poly.size());
+				float        src[3];
+				mc_to_source(middle[0] / corners, middle[1] / corners, middle[2] / corners, MapSlot{}, src);
+				vote = side_material(Vector(src[0], src[1], src[2]), planes[p].AsVector3D());
+			}
+			votes.push_back(vote);
+		}
+		BrushDig& dig = brush_dig_[brush];
+		dig.material = brush_material(votes);
+		for (const std::uint8_t vote : votes) {
+			dig.sides.push_back(vote != DIG_NONE ? vote : dig.material);
+		}
+		return dig;
+	}
+
+	void WorldCollision::log_dig_material(const Vector& eye, const Vector& forward)
+	{
+		constexpr float REACH_UNITS = 8192.0f;
+		constexpr float INSIDE_UNITS = 0.5f;     // the hit point moved this far into the brush it's on
+		constexpr float ON_PLANE_UNITS = 0.01f;  // how far out of a brush's plane that point may be and still be in it
+		Ray_t           ray;
+		ray.Init(eye, eye + forward * REACH_UNITS);
+		CTraceFilterWorldOnly filter;
+		trace_t               tr;
+		enginetrace->TraceRay(ray, DIGGABLE_BRUSHES, &filter, &tr);
+
+		// the brush hit: the first around the point a little inside it that has that point inside all its planes
+		int                  brush = -1, contents = 0;
+		CUtlVector<Vector4D> planes;
+		if (tr.fraction < 1.0f) {
+			const Vector    p = tr.endpos - tr.plane.normal * INSIDE_UNITS;
+			const Vector    h(0.25f, 0.25f, 0.25f);
+			CUtlVector<int> list;
+			enginetrace->GetBrushesInAABB(p - h, p + h, &list, DIGGABLE_BRUSHES);
+			for (int i = 0; i < list.Count() && brush < 0; ++i) {
+				planes.RemoveAll();
+				int  c = 0;
+				bool inside = enginetrace->GetBrushInfo(list[i], &planes, &c) && (c & DIGGABLE_BRUSHES) != 0;
+				for (int k = 0; k < planes.Count() && inside; ++k) {
+					inside = DotProduct(planes[k].AsVector3D(), p) - planes[k].w <= ON_PLANE_UNITS;
+				}
+				if (inside) {
+					brush = list[i];
+					contents = c;
+				}
+			}
+		}
+		if (brush < 0) {
+			log_info("hc_debug_dig_material: no world brush under the crosshair");
+			return;
+		}
+		if (!diggable(brush, contents)) {
+			log_info("hc_debug_dig_material: brush %d isn't diggable (contents 0x%x%s)", brush, static_cast<unsigned>(contents), sky_brush(brush) ? ", sky" : "");
+			return;
+		}
+
+		// the side hit: of the planes facing the way the hit's surface does, the one the hit lies closest to
+		int   side = -1;
+		float closest = FLT_MAX;
+		for (int k = 0; k < planes.Count(); ++k) {
+			const Vector& n = planes[k].AsVector3D();
+			const float   off = std::fabs(DotProduct(n, tr.endpos) - planes[k].w);
+			if (DotProduct(n, tr.plane.normal) >= SAME_NORMAL && off < closest) {
+				side = k;
+				closest = off;
+			}
+		}
+		const BrushDig&      dig = brush_dig(brush, planes);
+		const int            props = tr.surface.surfaceProps;
+		const surfacedata_t* data = props >= 0 ? physprops->GetSurfaceData(props) : nullptr;
+		const char*          prop = props >= 0 ? physprops->GetPropName(props) : nullptr;
+		// a game material of 0 would end the line there
+		const char game_material = data && data->game.material != 0 ? static_cast<char>(data->game.material) : '?';
+		const int  side_dig = side >= 0 && static_cast<std::size_t>(side) < dig.sides.size() ? dig.sides[side] : 0;
+		log_info("hc_debug_dig_material: brush %d side %d of %d: %s (%s, '%c') -> side %d, brush %d", brush, side, planes.Count(),
+			tr.surface.name ? tr.surface.name : "?", prop ? prop : "?", game_material, side_dig, dig.material);
 	}
 
 	void WorldCollision::add_displacements(const Vector& mins, const Vector& maxs, ColPrimitives& out) const

@@ -115,6 +115,19 @@ namespace halfcraft
 				world_.check_voxels(source_to_mc(feet, slot_), radius);
 			}
 
+			/// hc_debug_dig_material
+			void log_dig_material()
+			{
+				CBasePlayer* player = UTIL_GetLocalPlayer();
+				if (!player) {
+					log_info("hc_debug_dig_material: no player");
+					return;
+				}
+				Vector forward;
+				player->EyeVectors(&forward);
+				world_.log_dig_material(player->EyePosition(), forward);
+			}
+
 		private:
 			void update_hud(CBasePlayer* player, bool hide);
 			void update_use(CBasePlayer* player);
@@ -240,4 +253,12 @@ CON_COMMAND(hc_debug_voxels, "halfcraft: check minecraft's collision voxels arou
 	}
 	const int radius = args.ArgC() > 1 ? std::clamp(atoi(args[1]), 0, 6) : 2;
 	halfcraft::g_server_system.check_voxels(radius);
+}
+
+CON_COMMAND(hc_debug_dig_material, "halfcraft: log the dig material of the world brush under the crosshair: its side's surface, game material and DigMaterial")
+{
+	if (!UTIL_IsCommandIssuedByServerAdmin()) {
+		return;
+	}
+	halfcraft::g_server_system.log_dig_material();
 }
