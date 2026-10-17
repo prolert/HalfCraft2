@@ -8,9 +8,12 @@
 //   displacements      enginetrace displacement collide -> triangles
 //   static props       their .phy hulls                -> convexes
 //   solid entities     doors, lifts, props, crates     -> convexes, re-sent while they move
+//   the map's void     the .bsp's tree (models[0])     -> what's behind its walls, for the streamer's
+//                                                         worker (void_query, core/hc_dig_void.h)
 //
 // npcs and players are left out: npcs become minecraft actors, not walls.
 
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -25,10 +28,12 @@ namespace halfcraft
 	{
 	public:
 		/// a new map: where it sits in the minecraft world, and nothing cached from the last one.
-		/// @param map_name - its name ("d1_canals_01"), to read its sky brushes from; nullptr: none
+		/// @param map_name - its name ("d1_canals_01"), to read its sky brushes and bsp tree from; nullptr: none
 		void reset(MapSlot slot, const char* map_name);
 
 		void gather(const float lo[3], const float hi[3], ColPrimitives& out) override;
+		/// the map's bsp tree (none when it didn't read) and slot
+		VoidQuery void_query() const override;
 
 		/// hc_debug_voxels: voxelizes the regions around a point again and checks each voxel against
 		/// source's own collision (box traces, also from above and below: a displacement is one-sided),
@@ -69,6 +74,7 @@ namespace halfcraft
 
 		MapSlot                                               slot_;
 		std::vector<bool>                                     sky_brushes_;  // by brush index
+		std::shared_ptr<const BspTree>                        bsp_;          // the map's tree, which jobs share with the streamer's worker
 		std::unordered_map<const model_t*, std::vector<Hull>> hulls_;
 		std::unordered_map<int, Mover>                        movers_;  // by entity serial-qualified index
 		int                                                   frame_ = 0;

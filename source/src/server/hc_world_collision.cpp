@@ -9,10 +9,14 @@
 #include "gamerules.h"
 #include "bspfile.h"
 #include "filesystem.h"
+#include "world.h"
 
 #include "tier0/valve_minmax_off.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
+#include <memory>
 #include <string>
 
 #include "core/hc_log.h"
@@ -87,6 +91,74 @@ namespace halfcraft
 			}
 			log_info("sky: %d of %s's %zu brushes are its sky", count, path.c_str(), brushes.size());
 			return sky;
+		}
+
+		// read_bsp_tree's records are the file's (bspfile.h)
+		static_assert(sizeof(dplane_t) == BSP_PLANE_BYTES && sizeof(dnode_t) == BSP_NODE_BYTES);
+		static_assert(sizeof(dleaf_t) == BSP_LEAF_BYTES_V1 && sizeof(dleaf_version_0_t) == BSP_LEAF_BYTES_V0);
+
+		/// the map's bsp tree, what the streamer's worker finds the void behind its walls with (core/hc_dig_void.h).
+		/// logged with how often the engine's own contents agree with it (only the log's: the void is the tree's).
+		/// @return nullptr: the file's tree didn't read
+		std::shared_ptr<const BspTree> read_void_tree(const char* map_name)
+		{
+			const std::string         path = "maps/" + map_base_name(map_name) + ".bsp";
+			bsp::BspFile              file(path.c_str());
+			std::vector<std::uint8_t> planes, nodes, leaves;
+			std::vector<dmodel_t>     models;
+			int                       version = 0, leaf_version = 0;
+			auto                      tree = std::make_shared<BspTree>();
+			if (!file.open() || !file.lump_bytes(LUMP_PLANES, planes, version) || !file.lump_bytes(LUMP_NODES, nodes, version) ||
+				!file.lump_bytes(LUMP_LEAFS, leaves, leaf_version) || !file.lump(LUMP_MODELS, models) || models.empty() ||
+				!read_bsp_tree(planes, nodes, leaves, leaf_version, models[0].headnode, *tree)) {
+				log_warning("void: can't read %s's tree: nothing behind its walls is rock there", path.c_str());
+				return nullptr;
+			}
+			std::size_t solid = 0;
+			for (const int contents : tree->leaf_contents) {
+				solid += (contents & BSP_CONTENTS_SOLID) != 0 ? 1 : 0;
+			}
+
+			// the centres of an 8x8x8 grid over the world and 64 units around it: solid in the tree, and in the engine,
+			// asked about the world's collideable alone, or, when that gives no solid anywhere, for its point contents
+			// (the world and what's in it)
+			constexpr int   GRID = 8, POINTS = GRID * GRID * GRID;
+			constexpr float MARGIN = 64.0f;
+			const dmodel_t& world_model = models[0];
+			const auto      point = [&](int i) {
+				const int cell[3] = { i % GRID, i / GRID % GRID, i / (GRID * GRID) };
+				Vector    p;
+				for (int k = 0; k < 3; ++k) {
+					const float lo = world_model.mins[k] - MARGIN, hi = world_model.maxs[k] + MARGIN;
+					p[k] = lo + (static_cast<float>(cell[k]) + 0.5f) * (hi - lo) / GRID;
+				}
+				return p;
+			};
+			CWorld*                  world = GetWorldEntity();
+			ICollideable*            collideable = world ? world->GetCollideable() : nullptr;
+			std::array<bool, POINTS> tree_solid{}, engine_solid{};
+			bool                     any_solid = false;
+			for (int i = 0; i < POINTS; ++i) {
+				const Vector p = point(i);
+				const float  at[3] = { p.x, p.y, p.z };
+				tree_solid[i] = (point_contents(*tree, at) & BSP_CONTENTS_SOLID) != 0;
+				engine_solid[i] = collideable && (enginetrace->GetPointContents_Collideable(collideable, p) & CONTENTS_SOLID) != 0;
+				any_solid = any_solid || engine_solid[i];
+			}
+			const char* call = "world collideable";
+			if (!any_solid) {
+				call = "point contents";
+				for (int i = 0; i < POINTS; ++i) {
+					engine_solid[i] = (enginetrace->GetPointContents(point(i)) & CONTENTS_SOLID) != 0;
+				}
+			}
+			int agree = 0;
+			for (int i = 0; i < POINTS; ++i) {
+				agree += tree_solid[i] == engine_solid[i] ? 1 : 0;
+			}
+			log_info("void: %s's tree: %zu nodes, %zu leaves (%zu solid); the engine (%s) agrees at %d of %d points", path.c_str(), tree->nodes.size(),
+				tree->leaf_contents.size(), solid, call, agree, POINTS);
+			return tree;
 		}
 
 		float slot_offset(MapSlot slot)
@@ -293,6 +365,12 @@ namespace halfcraft
 		hulls_.clear();
 		movers_.clear();
 		sky_brushes_ = map_name ? read_sky_brushes(map_name) : std::vector<bool>();
+		bsp_ = map_name ? read_void_tree(map_name) : nullptr;
+	}
+
+	VoidQuery WorldCollision::void_query() const
+	{
+		return { bsp_, slot_ };
 	}
 
 	void WorldCollision::to_source_box(const float lo[3], const float hi[3], Vector& mins, Vector& maxs) const

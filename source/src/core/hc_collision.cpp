@@ -48,6 +48,22 @@ namespace halfcraft
 		{
 			return v >= 0 ? v / d : -((-v + d - 1) / d);
 		}
+
+		/// what a region's messages start with: its blocks, the epoch it's of, and how many items follow
+		proto::ColRegion region_header(int rx, int ry, int rz, std::uint32_t epoch, std::uint32_t count)
+		{
+			constexpr int    R = COLLISION_REGION_SIZE;
+			proto::ColRegion header{};
+			header.minX = rx * R;
+			header.minY = ry * R;
+			header.minZ = rz * R;
+			header.maxX = header.minX + R - 1;
+			header.maxY = header.minY + R - 1;
+			header.maxZ = header.minZ + R - 1;
+			header.epoch = epoch;
+			header.count = count;
+			return header;
+		}
 	}
 
 	CollisionStreamer::CollisionStreamer(Link& link) : link_(link)
@@ -220,6 +236,7 @@ namespace halfcraft
 		const float lo[3] = { float(rx * REGION_SIZE) - 0.5f, float(ry * REGION_SIZE) - 0.5f, float(rz * REGION_SIZE) - 0.5f };
 		const float hi[3] = { lo[0] + REGION_SIZE + 1.0f, lo[1] + REGION_SIZE + 1.0f, lo[2] + REGION_SIZE + 1.0f };
 		source.gather(lo, hi, job.prims);
+		job.voids = source.void_query();
 		std::lock_guard<std::mutex> lock(mutex_);
 		queue_.push_back(std::move(job));
 		cv_.notify_one();
@@ -247,6 +264,7 @@ namespace halfcraft
 				solid.clear();
 				triangulate(job.prims, solid);
 				send_triangles(job, solid);
+				send_voids(job);  // before the region's kColRegion
 				voxelize(job);
 			}
 		}
@@ -284,15 +302,7 @@ namespace halfcraft
 				out.push_back(t);
 			}
 		}
-		proto::ColRegion header{};
-		header.minX = job.rx * REGION_SIZE;
-		header.minY = job.ry * REGION_SIZE;
-		header.minZ = job.rz * REGION_SIZE;
-		header.maxX = header.minX + REGION_SIZE - 1;
-		header.maxY = header.minY + REGION_SIZE - 1;
-		header.maxZ = header.minZ + REGION_SIZE - 1;
-		header.epoch = job.epoch;
-		header.count = static_cast<std::uint32_t>(out.size());
+		const proto::ColRegion    header = region_header(job.rx, job.ry, job.rz, job.epoch, static_cast<std::uint32_t>(out.size()));
 		std::vector<std::uint8_t> payload(sizeof(header) + out.size() * sizeof(proto::ColTri));
 		std::memcpy(payload.data(), &header, sizeof(header));
 		if (!out.empty()) {
@@ -313,6 +323,7 @@ namespace halfcraft
 	static_assert(VOID_NONE == proto::kVoidNone);
 	static_assert(VOID_ALL == proto::kVoidAll);
 	static_assert(VOID_SOME == proto::kVoidSome);
+	static_assert(sizeof(RegionVoid::kind) == 512 && sizeof(std::array<std::uint64_t, 8>) == sizeof(proto::ColBlock::bits));  // kColVoid's kind, and a kVoidSome block's bits
 
 	void CollisionStreamer::voxelize(const Job& job)
 	{
@@ -352,20 +363,34 @@ namespace halfcraft
 			}
 		}
 
-		proto::ColRegion header{};
-		header.minX = job.rx * REGION_SIZE;
-		header.minY = job.ry * REGION_SIZE;
-		header.minZ = job.rz * REGION_SIZE;
-		header.maxX = header.minX + REGION_SIZE - 1;
-		header.maxY = header.minY + REGION_SIZE - 1;
-		header.maxZ = header.minZ + REGION_SIZE - 1;
-		header.epoch = job.epoch;
-		header.count = static_cast<std::uint32_t>(blocks.size());
+		const proto::ColRegion    header = region_header(job.rx, job.ry, job.rz, job.epoch, static_cast<std::uint32_t>(blocks.size()));
 		std::vector<std::uint8_t> payload(sizeof(header) + blocks.size() * sizeof(proto::ColBlock));
 		std::memcpy(payload.data(), &header, sizeof(header));
 		if (!blocks.empty()) {
 			std::memcpy(payload.data() + sizeof(header), blocks.data(), blocks.size() * sizeof(proto::ColBlock));
 		}
 		send(payload, proto::kColRegion);
+	}
+
+	void CollisionStreamer::send_voids(const Job& job)
+	{
+		if (!job.voids.tree) {
+			return;  // the map's tree didn't read: no rock behind its walls
+		}
+		// a region with nothing gathered in it is looked at too: off the map, it's all void
+		RegionVoid voids;
+		void_region(job.prims, *job.voids.tree, job.voids.slot, job.rx, job.ry, job.rz, voids);
+		if (!voids.any()) {
+			return;  // the region's kColRegion alone says so
+		}
+		const proto::ColRegion    header = region_header(job.rx, job.ry, job.rz, job.epoch, static_cast<std::uint32_t>(voids.layers.size()));
+		constexpr std::size_t     BITS_BYTES = sizeof(proto::ColBlock::bits);
+		std::vector<std::uint8_t> payload(sizeof(header) + sizeof(voids.kind) + voids.layers.size() * BITS_BYTES);
+		std::memcpy(payload.data(), &header, sizeof(header));
+		std::memcpy(payload.data() + sizeof(header), voids.kind.data(), sizeof(voids.kind));
+		if (!voids.layers.empty()) {
+			std::memcpy(payload.data() + sizeof(header) + sizeof(voids.kind), voids.layers.data(), voids.layers.size() * BITS_BYTES);
+		}
+		send(payload, proto::kColVoid);
 	}
 }

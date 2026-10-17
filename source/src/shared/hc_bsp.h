@@ -1,9 +1,10 @@
 #pragma once
 
 // client.dll and server.dll: a map's .bsp read straight from the game's files, lump by lump (the grid's
-// floors, hc_floors.cpp; the sky's brushes, hc_world_collision.cpp). include after cbase.h, bspfile.h,
-// filesystem.h and tier0/valve_minmax_off.h.
+// floors, hc_floors.cpp; the sky's brushes and the tree, hc_world_collision.cpp). include after cbase.h,
+// bspfile.h, filesystem.h and tier0/valve_minmax_off.h.
 
+#include <cstdint>
 #include <vector>
 
 namespace halfcraft
@@ -64,6 +65,13 @@ namespace halfcraft
 				}
 				filesystem->Seek(file_, l.offset, FILESYSTEM_SEEK_HEAD);
 				return filesystem->Read(out.data(), l.length, file_) == l.length;
+			}
+
+			/// a lump's bytes and its version (a record's layout: LUMP_LEAFS's 0 or 1). false as lump's.
+			bool lump_bytes(int index, std::vector<std::uint8_t>& out, int& version)
+			{
+				version = header_.lumps[index].version;
+				return lump(index, out);
 			}
 
 		private:

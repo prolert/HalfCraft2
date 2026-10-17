@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <vector>
 
@@ -569,6 +570,53 @@ namespace
 		CHECK(contents_at(broken, 80) == 0);
 	}
 
+	/// v's bytes at `at`
+	template <typename T>
+	void put(std::vector<std::uint8_t>& bytes, std::size_t at, T v)
+	{
+		std::memcpy(bytes.data() + at, &v, sizeof(v));
+	}
+
+	void test_read_bsp_tree()
+	{
+		// the .bsp's lumps of one node on the plane z = 0: empty in front of it (leaf 0), solid behind it (leaf 1)
+		std::vector<std::uint8_t> planes(BSP_PLANE_BYTES), nodes(BSP_NODE_BYTES), leaves(2 * BSP_LEAF_BYTES_V1), leaves_v0(2 * BSP_LEAF_BYTES_V0);
+		put(planes, 8, 1.0f);  // dplane_t's normal.z
+		put(nodes, 4, -1);     // dnode_t's children: in front, behind
+		put(nodes, 8, -2);
+		put(leaves, BSP_LEAF_BYTES_V1, BSP_CONTENTS_SOLID);  // dleaf_t's contents
+		put(leaves_v0, BSP_LEAF_BYTES_V0, BSP_CONTENTS_SOLID);
+		put(leaves_v0, 32, 7);  // leaf 0's ambient light, where version 1's leaf 1 would start
+
+		const float above[3] = { 0, 0, 10 }, below[3] = { 0, 0, -10 };
+		BspTree     tree;
+		CHECK(read_bsp_tree(planes, nodes, leaves, 1, 0, tree));
+		CHECK(tree.planes.size() == 1 && tree.nodes.size() == 1 && tree.leaf_contents.size() == 2 && tree.headnode == 0);
+		CHECK(point_contents(tree, above) == 0);
+		CHECK(point_contents(tree, below) == BSP_CONTENTS_SOLID);
+		CHECK(read_bsp_tree(planes, nodes, leaves_v0, 0, 0, tree));
+		CHECK(point_contents(tree, below) == BSP_CONTENTS_SOLID);
+
+		// what it refuses leaves out empty, whatever it held
+		const auto refused = [&tree](const std::vector<std::uint8_t>& p, const std::vector<std::uint8_t>& n, const std::vector<std::uint8_t>& l, int version, int headnode) {
+			BspTree out = tree;
+			out.headnode = 5;
+			return !read_bsp_tree(p, n, l, version, headnode, out) && out.planes.empty() && out.nodes.empty() && out.leaf_contents.empty() && out.headnode == 0;
+		};
+		CHECK(refused(planes, nodes, leaves, 2, 0));                                             // a leaf version it doesn't know
+		CHECK(refused(planes, nodes, std::vector<std::uint8_t>(BSP_LEAF_BYTES_V1 + 1), 1, 0));  // a lump that isn't whole leaves
+		CHECK(refused(planes, nodes, leaves, 1, 1));                                             // a head node it doesn't have
+		std::vector<std::uint8_t> bad = nodes;
+		put(bad, 0, 1);  // a plane it doesn't have
+		CHECK(refused(planes, bad, leaves, 1, 0));
+		bad = nodes;
+		put(bad, 8, -3);  // leaf 2, which it doesn't have
+		CHECK(refused(planes, bad, leaves, 1, 0));
+		bad = nodes;
+		put(bad, 8, 0);  // a child that doesn't come after its node (here itself: a loop)
+		CHECK(refused(planes, bad, leaves, 1, 0));
+	}
+
 	void test_void_region_finds_the_rock_behind_the_walls()
 	{
 		const MapSlot slot{ 1, 16.0f };
@@ -704,6 +752,7 @@ int run_tests()
 	test_subtract_boxes_keeps_each_piece_within_its_bounds();
 	test_subtract_boxes_drops_slivers();
 	test_bsp_tree_gives_a_points_contents();
+	test_read_bsp_tree();
 	test_void_region_finds_the_rock_behind_the_walls();
 	test_void_region_tests_a_convex_by_its_planes();
 	test_dig_mask_layout_places_the_cells_in_the_texture();

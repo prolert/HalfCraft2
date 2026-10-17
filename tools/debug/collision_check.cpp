@@ -12,7 +12,9 @@
 // grid z: the map's grid height (core/hc_grid.h), as server.dll logs it on a load ("grid offset for
 // d1_canals_01: 16 units"). the optional point limits the check to a square around it (source units).
 // it also times what the streamer's worker thread does with each region that has anything in it
-// (triangulate and voxelize_region): the worker has to keep up with the regions server.dll gathers.
+// (triangulate, voxelize_region and void_region, core/hc_dig_void.h): the worker has to keep up with the regions
+// server.dll gathers. the void behind the map's walls (kColVoid) comes from the .bsp's tree, as server.dll reads
+// it (core/hc_bsp_tree.h), and is counted in every region, with geometry or without.
 // the triangles come straight from the .bsp: the game hands them over through vphysics, which may move a
 // vertex by a float's last bit.
 
@@ -32,6 +34,8 @@
 
 #include "core/hc_units.h"
 #include "core/hc_collision_shapes.h"
+#include "core/hc_bsp_tree.h"
+#include "core/hc_dig_void.h"
 
 using namespace halfcraft;
 
@@ -147,6 +151,7 @@ namespace
 	{
 		std::vector<std::vector<std::array<float, 4>>> brushes;  // source planes: inside where n.p <= dist
 		std::vector<std::array<float, 6>>              brush_bounds;
+		std::vector<std::uint32_t>                     brush_flags;  // PRIM_DIGGABLE or 0, as server.dll flags them
 		std::vector<std::array<float, 9>>              disp_tris;  // source corners
 		float                                          mins[3], maxs[3];
 	};
@@ -213,6 +218,8 @@ namespace
 			}
 			world.brushes.push_back(std::move(brush));
 			world.brush_bounds.push_back(bounds);
+			// solid, window, grate: what minecraft digs (the sky's brushes too here: void_region counts them alike)
+			world.brush_flags.push_back((brushes[b].contents & (0x1 | 0x2 | 0x8)) != 0 ? PRIM_DIGGABLE : 0u);
 		}
 
 		// displacements: the face's corners (the one nearest the start first) spanned by a
@@ -297,6 +304,7 @@ namespace
 			}
 			ColPrimitives::Convex cvx;
 			brush_to_convex(world.brushes[b].data(), world.brushes[b].size(), mins, maxs, slot, cvx);
+			cvx.flags = world.brush_flags[b];
 			out.convexes.push_back(std::move(cvx));
 		}
 		for (const auto& t : world.disp_tris) {
@@ -346,6 +354,14 @@ int check(int argc, char** argv)
 	slot.grid_z = static_cast<float>(std::atof(argv[2]));
 	World world;
 	read_world(bsp, world);
+	BspTree tree;
+	if (!read_bsp_tree(bsp.lump<std::uint8_t>(LUMP_PLANES), bsp.lump<std::uint8_t>(LUMP_NODES), bsp.lump<std::uint8_t>(LUMP_LEAFS), bsp.version(LUMP_LEAFS),
+			bsp.lump<Model>(LUMP_MODELS)[0].head_node, tree)) {
+		std::fprintf(stderr, "can't read the .bsp's tree\n");
+		return 2;
+	}
+	const auto solid_leaves = std::count_if(tree.leaf_contents.begin(), tree.leaf_contents.end(), [](int contents) { return (contents & BSP_CONTENTS_SOLID) != 0; });
+	std::printf("tree: %zu nodes, %zu leaves (%zu solid)\n", tree.nodes.size(), tree.leaf_contents.size(), static_cast<std::size_t>(solid_leaves));
 	if (argc == 6) {
 		const float x = static_cast<float>(std::atof(argv[3])), y = static_cast<float>(std::atof(argv[4])), r = static_cast<float>(std::atof(argv[5]));
 		world.mins[0] = std::max(world.mins[0], x - r);
@@ -371,6 +387,8 @@ int check(int argc, char** argv)
 	std::uint64_t                      spots = 0, holes = 0, flat_on_boundary = 0;
 	std::map<std::array<int, 3>, Hole> holes_by_block;  // minecraft block -> its holes
 	std::vector<ColPrimitives::Tri>    tris;
+	RegionVoid                         voids;
+	std::uint64_t                      void_regions = 0, void_whole = 0, void_partly = 0;
 	using Clock = std::chrono::steady_clock;
 	Clock::duration worker{}, slowest{};
 	std::uint64_t   timed = 0;
@@ -385,12 +403,16 @@ int check(int argc, char** argv)
 				tris.clear();
 				triangulate(prims[ry], tris);
 				voxelize_region(prims[ry], rx, ry, rz, column[ry]);
+				void_region(prims[ry], tree, slot, rx, ry, rz, voids);
 				if (!prims[ry].tris.empty() || !prims[ry].convexes.empty()) {
 					const auto took = Clock::now() - began;
 					worker += took;
 					slowest = std::max(slowest, took);
 					++timed;
 				}
+				void_regions += voids.any() ? 1 : 0;
+				void_whole += static_cast<std::uint64_t>(std::count(voids.kind.begin(), voids.kind.end(), VOID_ALL));
+				void_partly += static_cast<std::uint64_t>(std::count(voids.kind.begin(), voids.kind.end(), VOID_SOME));
 			}
 			auto solid_at = [&](int ry, int vx, int vy, int vz) {
 				ry += static_cast<int>(std::floor(vy / static_cast<float>(REGION_VOXELS)));
@@ -460,6 +482,8 @@ int check(int argc, char** argv)
 	auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
 	std::printf("worker: %llu regions with geometry, %.2f ms a region on average, %.2f ms at worst\n", static_cast<unsigned long long>(timed),
 		timed ? ms(worker) / static_cast<double>(timed) : 0.0, ms(slowest));
+	std::printf("void: %llu regions with void, %llu blocks wholly void, %llu partly\n", static_cast<unsigned long long>(void_regions),
+		static_cast<unsigned long long>(void_whole), static_cast<unsigned long long>(void_partly));
 	std::vector<Hole> worst;
 	worst.reserve(holes_by_block.size());
 	for (const auto& entry : holes_by_block) {

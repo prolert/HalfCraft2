@@ -6,11 +6,13 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
+#include "hc_bsp_tree.h"
 #include "hc_link.h"
 #include "hc_units.h"
 #include "hc_collision_shapes.h"
@@ -20,10 +22,19 @@
 // else minecraft asks about: block placement, mobs, items). ported from SkyCraft's Collision.cpp.
 //
 // main thread: picks the regions that need (re)sending and asks the CollisionSource what is in them.
-// worker thread: triangulates, voxelizes and writes the collision ring.
+// worker thread: triangulates, voxelizes, finds the void behind the map's walls (core/hc_dig_void.h) and
+// writes the collision ring.
 
 namespace halfcraft
 {
+	/// what the worker finds the void behind the map's walls with (kColVoid): the map's bsp tree, shared with the
+	/// jobs that hold it (a map load swaps it on the main thread), and where the map sits. no tree: no void.
+	struct VoidQuery
+	{
+		std::shared_ptr<const BspTree> tree;
+		MapSlot                        slot;
+	};
+
 	/// what the player collides with, supplied by the game (server.dll).
 	class CollisionSource
 	{
@@ -31,6 +42,8 @@ namespace halfcraft
 		virtual ~CollisionSource() = default;
 		/// adds every solid thing overlapping the minecraft box [lo, hi]. main thread.
 		virtual void gather(const float lo[3], const float hi[3], ColPrimitives& out) = 0;
+		/// the map's tree and slot for the void in the regions gathered now. main thread.
+		virtual VoidQuery void_query() const { return {}; }
 	};
 
 	class CollisionStreamer
@@ -64,6 +77,7 @@ namespace halfcraft
 			std::uint32_t epoch = 0;
 			bool          clear = false;
 			ColPrimitives prims;
+			VoidQuery     voids;
 		};
 
 		void harvest(int rx, int ry, int rz, CollisionSource& source);
@@ -71,6 +85,7 @@ namespace halfcraft
 		void send(const std::vector<std::uint8_t>& payload, proto::ColType type);
 		void send_triangles(const Job& job, const std::vector<ColPrimitives::Tri>& solid);
 		void voxelize(const Job& job);
+		void send_voids(const Job& job);
 
 		using Clock = std::chrono::steady_clock;
 

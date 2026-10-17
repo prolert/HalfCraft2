@@ -9,8 +9,10 @@ python tools/debug/collision_check.py --map d1_canals_01 --grid-z 16 --at 217,-9
 python tools/debug/collision_check.py --bsp C:\\maps\\x.bsp --grid-z 0                    any .bsp
 
 --grid-z: the map's grid height, as server.dll logs it on a load ("grid offset for d1_canals_01: 16 units").
-exits 1 when it finds holes, and lists the worst of them (source coordinates). it also prints what the
-streamer's worker thread spends on a region (triangulate + voxelize), on average and at worst.
+exits 1 when it finds holes, and lists the worst of them (source coordinates); 2 when the .bsp (or its tree)
+doesn't read. it also prints what the streamer's worker thread spends on a region (triangulate + voxelize +
+void_region, the void behind the map's walls from the .bsp's tree), on average and at worst, and how much void
+it found.
 """
 
 import argparse
