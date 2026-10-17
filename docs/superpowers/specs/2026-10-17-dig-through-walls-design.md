@@ -223,6 +223,139 @@ server.dll: вырезает выкопанные кубы из брашей в 
    `r_novis`, `hc_dig`.
 6. **Проверка в игре** (ниже).
 
+## Результаты этапа 1
+
+Спайк — ветка `dig-spike` (коммит `1e547b2`, не сливается), 2026-10-17, `hl2dm`, `d1_trainstation_02`, тестовая
+сессия. Кадры и маски — в `build/dig-spike/`, эталон и сейв — в `build/dig-baseline/`. Итог: **вариант A**,
+проверки 1–6 пройдены (1 — с оговоркой про автоэкспозицию HDR, см. ниже); задачи 2–14 можно начинать.
+
+**Окружение.** Windows 11, Visual Studio 18 Insiders (тулсет `v145`, Windows SDK из `toolchain`), GNU make 4.4.1
+(`winget install --id ezwinports.make -e`), Python 3.13.15 (стоял 3.13.7, winget обновил; первым в PATH пользователя
+поставил его же установщик), `pip install ruff==0.16.9 clang-format==22.1.3 clang-tidy==22.1.8`; `tools/halfcraft/llvm.py`
+берёт clang-format/clang-tidy 22.1.3 из Visual Studio, строки `isn't clang-format 22` не было. `make setup`, `make build`
+(оба движка), `make mc`, `make lint`, `make tidy` (`clang-tidy: 96 checks of 44 files`, `no findings`) — код 0, чинить
+ничего не пришлось.
+
+**Вариант и папка DLL (задачи 9, 14).** Вариант **A**: `game_shader_generic_halfcraft.dll` регистрирует шейдер под именем
+`LightmappedGeneric`, движок берёт его вместо стокового для всех материалов мира (`SetShader` не нужен). С первого запуска
+из `build/game-hl2dm/bin/x64`: `[halfcraft] spike: game_shader_generic_halfcraft.dll loaded`; в `SHADER_INIT_PARAMS` нашей
+копии прошло 687 материалов карты, среди них материал стены M:
+`[halfcraft] spike: LightmappedGeneric from game_shader_generic_halfcraft.dll: concrete/concretewall037d`.
+Папка DLL — **`bin/x64`** (рядом с client.dll; `gamebin |gameinfo_path|bin` в `gameinfo.txt`, движок добавляет `x64`).
+
+**Сборка DLL (задача 9).**
+- `.vpc`: `materialsystem/stdshaders/game_shader_generic_halfcraft.vpc` — `game_shader_generic_example_base.vpc` с макросами
+  `game_shader_generic_example_episodic.vpc` (`SRCDIR "..\.."`, `OUTBINNAME "game_shader_generic_halfcraft"`, `GAMENAME
+  "mod_ep1"`, `OUTBINDIR "$SRCDIR\..\game\$GAMENAME\bin"` + `x64` из `source_dll_win32_base.vpc`), `$Include
+  "$SRCDIR\vpc_scripts\source_dll_base.vpc"`, папки `Release_halfcraft`/`Debug_halfcraft`, `$AdditionalIncludeDirectories
+  "$BASE;include;"`; в `vpc_scripts/projects.vgc` после `game_shader_generic_std` — `$Project "game_shader_generic_halfcraft"
+  { "materialsystem\stdshaders\game_shader_generic_halfcraft.vpc" [$EPISODIC] }`. `devtools\bin\vpc.exe /episodic
+  /define:SOURCESDK +game_shader_generic_halfcraft /mksln hc_shaders.sln` пишет `game_shader_generic_halfcraft_win64_episodic.vcxproj`
+  (и `stdshaders/_vpc_/`), `build.msbuild(..., 'hc_shaders.sln', 'win64', ...)` — без ошибок и предупреждений, DLL
+  публикуется в `source-sdk-2013/game/mod_ep1/bin/x64`.
+- Определения: `$PreprocessorDefinitions "$BASE;STDSHADER_DX9_DLL_EXPORT;FAST_MATERIALVAR_ACCESS"` и `"$BASE;USE_ACTUAL_DX"
+  [$WINDOWS && !$GL]`, без `GAME_SHADER_DLL`. Файлы: `BaseVSShader.cpp`, `hc_lightmappedgeneric_dx9.cpp`,
+  `hc_lightmappedgeneric_dx9_helper.cpp`; библиотеки `mathlib`, `shaderlib`, `tier2`. Символов `BaseVSShader.cpp` хватило —
+  других файлов из `stdshaders/` добавлять не пришлось.
+- Что убрано в копиях: в хелпере — ветки `lightmappedgeneric_ps20` (статическая и динамическая) с её `.inc` и
+  `extern ConVar r_flashlight_version2` (`DrawLightmappedGeneric_DX9` просто зовёт `_Internal`); вершинный шейдер — стоковый
+  `lightmappedgeneric_vs20` (его `.inc` из `stdshaders/include`), `DrawFlashlight_dx90` не тронут. Добавлено: `SPIKE_BOX`,
+  ConVar `hc_spike_clip` (1), константы `c20`/`c21` перед `DynamicCmdsOut.End()`, в `hc_lightmappedgeneric_ps2_3_x.h` —
+  `g_SpikeBoxMin : register( c20 )`, `g_SpikeBoxMax : register( c21 )` и первым в `main()` `clip` по точке
+  `worldPos + normalize( worldPos - g_EyePos ) * 0.5`. ConVar'ы хелпера (`r_lightmap_bicubic` и др.) связываются со
+  стоковыми: `r_lightmap_bicubic = 1 ( def. "0" )`.
+- `ShaderCompile2.exe -ver 20b -shaderpath build/shaders-spike hc_lightmappedgeneric_ps2x.fxc`: **21,9 мин** (21:53 по его
+  часам; против `COMPILE_SECONDS = 600` — в 2,2 раза дольше, лимит в `build.py` для этого шейдера поднять), набор
+  **полный** (урезать не пришлось), `WARNINGS/ERRORS 28/0` — **ошибок комбинаций 0** (предупреждения X3206, X3576, X3571).
+  `.inc` — в **`build/shaders-spike/include/`** (`hc_lightmappedgeneric_ps20b.inc`, 21 228 байт; оттуда в
+  `stdshaders/include/`), `.vcs` — `build/shaders-spike/shaders/fxc/hc_lightmappedgeneric_ps20b.vcs`, 12 197 881 байт,
+  `struct.unpack_from('<iIi', …)` = **`(6, 2717908992, 288)`**. `.vcs` лежит в `build/game-hl2dm/shaders/fxc`.
+
+**Сейв и кадр (задачи 9, 14).** S = **1** (`map maps/d1_trainstation_02.bsp (slot 1)`), G = **0** (`grid offset for
+d1_trainstation_02: 0 units`). Стена у старта (северная, y = −144) не подошла: пол там на z = −64 (y Minecraft −1,6, не на
+сетке), и бокс «2 клетки вверх от floor(y ног)» = клетки −2…−1 оставил бы голову игрока (−1,6 + 1,8 = 0,2) в стене над
+боксом — проверка 5 не прошла бы из-за геометрии. Поэтому взята ближайшая стена на полу по сетке (z = 80): восточная стена
+склада над стартом (найдена по `.bsp` офлайн, подтверждена зондом). Позиция: `cmd 'sv_cheats 1' 'setpos -4304 -224 -64'`,
+затем `'setpos -4556 20 81'` (сдвиг меньше 160 юнитов `setpos` не берёт: позицию держит Minecraft, `TELEPORT_THRESHOLD`;
+Minecraft к тому же сдвигает цель на несколько юнитов). В сейве игрок стоит в source (−4549,50 13,78 80,00), minecraft
+(910,263 2,000 −0,345). `cmd 'sv_cheats 0' 'hc_look 20 -90' 'save dig_base'`: **P0 = 20, Y0 = Y2 = −90**. Шум кадра
+**N = 0,008 %** (`stock_b` и `stock_c` против `stock`: `0.008% … (bounds x 194-223, y 6-13)` — строки консоли).
+Процедура «кадр dig_base» — как в задаче 1 (`load dig_base`, `puppet on` 120 с, `hc_look 20 -90` [команды] `hc_key 58`
+`setpause` `screenshot` `unpause` `hc_key 58`), с оговоркой:
+- **автоэкспозиция HDR** (`mat_hdr_level 2`, `mat_dynamic_tonemapping 1`): после `load` экспозиция ещё растёт, поэтому
+  каждая лишняя команда в процедуре (≈2 с) светлит кадр на ≈2 %, через 40 с — на 6–10 %, и даже одинаковые процедуры
+  иногда расходятся на ≈5 % (стоковая сборка, шаг 15: `stock_final` 0,020 %, max Δ 10). Сравнивать кадры с одинаковым числом
+  команд, а там, где важна точность (задачи 9, 14), фиксировать экспозицию: `'sv_cheats 1' 'mat_force_tonemap_scale 1'` в
+  команды кадра — так `stock` и копия шейдера совпадают до 2 уровней.
+
+**Стены W2, W1 (задача 14; проверка 4).**
+- **W2** (стена бокса): `pos (910.26 2.00 -0.34)` по `hc_state.py`, yaw **Y2 = −90**, толщина **8,06 юнита**
+  (`hit -4416.03 13.78 95.42 normal -1.00 0.00 0.00, material CONCRETE/CONCRETEWALL037D, minecraft 913.599 2.386 -0.345
+  (slot 1, grid_z 0)`, `+1`/`+8: contents 0x1 cluster -1 area 0, brush yes`, `+20…+240: contents 0x0 cluster 608 area 7,
+  brush no`, `back face -4407.97 … minecraft 913.801 …`). M = `CONCRETE/CONCRETEWALL037D`; за стеной — переулок (кластер 608).
+- **W1** (фасад, за которым кончается карта, ≈5 блоков от W2): северная стена того же склада, `pos (911.08 2.00 -1.67)`,
+  yaw **Y1 = 180**, толщина **8,06 юнита**. Строки зонда:
+  ```
+  [halfcraft] spike probe: hit -4516.97 191.97 144.00 normal 0.00 -1.00 0.00, material CONCRETE/CONCRETEWALL037D, minecraft 911.076 3.600 -4.799 (slot 1, grid_z 0)
+  [halfcraft] spike probe: +1: contents 0x1 cluster -1 area 0, brush yes
+  [halfcraft] spike probe: +8: contents 0x1 cluster -1 area 0, brush yes
+  [halfcraft] spike probe: +20: contents 0x1 cluster -1 area 0, brush no
+  [halfcraft] spike probe: +40 … +400: contents 0x1 cluster -1 area 0, brush no
+  [halfcraft] spike probe: back face -4516.97 200.03 144.00, minecraft 911.076 3.600 -5.001
+  ```
+  **Проверка 4 пройдена**: за последней `brush yes` — `contents 0x1 cluster -1, brush no`, листья снаружи карты твёрдые.
+
+**Бокс.** Клетки Minecraft: x 913–914 (клетка `hit` и первая с центром за `back face` 913,801), y 2–3 (`floor(2,000)` и
+выше), z −1; lo = (913, 2, −1), hi = (915, 4, 0). `SPIKE_BOX = { -4440, 0, 80, -4360, 40, 160 }` (одинаковый в
+`hc_world_collision.cpp`, `hc_server.cpp` и `hc_lightmappedgeneric_dx9_helper.cpp`). В кадре `dig_base` бокс — x 529–698,
+y 104–412 (`cut-diff`).
+
+**Проверка 1 (вне бокса — стоковая картинка) — пройдена, в пределах шума экспозиции.** `tga_diff stock c0 --max 0.108`:
+`0.183% … (bounds x 8-964, y 3-74)`, код 1 — строки консоли (там же, где `noise-diff`) и 19 пикселей в светлом окне на
++9…10 уровней. Причина — экспозиция, не шейдер: в этом `c0` вырез был виден от `load` до команды `hc_spike_clip 0`, и в
+процедуре на команду больше; стоковый кадр с одной лишней командой (`echo extra`) сам даёт 0,091 %; `c0`, снятый так же, но
+с `hc_spike_clip 0` уже до `load`, — `0.080% … (bounds x 8-257, y 5-14)`, код 0. С фиксированной экспозицией
+(`mat_force_tonemap_scale 1`) кадры со стоковым шейдером (без DLL) и с нашей копией (`hc_spike_clip 0`) совпадают:
+`0.004%` (больше 8) и `0.007%` (больше 2), только строки консоли, яркость областей 1,0000. Маски: `c0-diff.tga`,
+`diag_c0F-diff.tga`.
+
+**Вырез (A).** `tga_diff c0 c1 --out cut-diff`: `4.451% … (bounds x 8-698, y 5-412)` — прямоугольник x 529–698,
+y 104–412 на месте бокса (плюс строки консоли), сквозь него видна освещённая стена другой стороны переулка с плющом.
+
+**Проверка 2 (вырез и факел).** В боксе стены нет: видна соседняя «комната» — переулок (не пустота и не HOM).
+`hc_mc setblock 912 2 -1 minecraft:torch` (на полу перед колонкой бокса): стена вокруг освещена факелом; в боксе —
+освещённый **«призрак» стены** (проход фонарика `DrawFlashlight_dx90` не режется — ожидаемо, в задаче 9 тот же `clip`
+нужен и в нём). Снимки `check2_torch.tga` / `check2_torch_clip0.tga`, потом `minecraft:air`.
+
+**Проверка 3 (видимость) — пройдена.** Переулок виден через бокс и как есть, и после `'sv_cheats 1' 'r_novis 1'
+'r_portalsopenall 1'`, и после `'r_novis 0' 'r_portalsopenall 0' 'sv_cheats 0' 'hc_spike_vis 1'`
+(`FCVAR_CHEAT cvars reverted to defaults.`, затем `[halfcraft] spike: r_novis 1, r_portalsopenall 1 from client.dll`).
+Значение из client.dll держится: сразу, через 10 с и после `load dig_base` — `"r_novis" = "1" ( def. "0" )`,
+`"r_portalsopenall" = "1" ( def. "0" )`. Оговорка: переулок уже в PVS склада (через окна), так что эта стена не показывает,
+нужен ли `r_novis` для дыры в другую область.
+
+**Проверка 5 (игрок в браше) — пройдена.** `hc_mc tp @s 912.3 2.0 -0.5 -90 20` (за 1 блок до колонки; `setpos` сдвигался
+Minecraft'ом), `hc_look 20 -90`, `hc_key 26 1 0.24` (с = 1,4 / 4,3 ≈ 0,33 с проскочило: игрок доехал до x 914,10 и упал в
+переулок — Source и это принял). Три `hc_spike_probe`: `player -4416.31 20.00 80.00, minecraft 913.592 2.000 -0.500, in the
+box: yes` (origin одинаковый), за 10 с нет `source moved the player`, `data get entity @s Pos` →
+`[913.5914985092598d, 2.0d, -0.5d]` = координаты зонда. Origin — в 0,28 юнита перед гранью (−4416,03), хулл ±16 юнитов
+перекрывает браш стены (−4416…−4408) на всю толщину; физическая тень игрока его не вытаскивает. Запасной вариант из рисков
+не нужен.
+
+**Проверка 6 (hl2 без DLL) — пройдена.** `make run ENGINE=hl2 MAP=d1_trainstation_02`: `[halfcraft] spike:
+game_shader_generic_halfcraft.dll not loaded`, `puppet on (minecraft drives the player)`.
+
+**Возврат (шаг 15).** `dig-prototype`, дерево SDK вычищено (`hl2dm sdk already patched at …`, в `src/materialsystem` и
+`src/vpc_scripts` только ` M flashlight_ps2x.fxc` и ` M lightmappedgeneric_flashlight_vs20.fxc`), `make build` — код 0.
+`tga_diff stock stock_final --max 0.008`: `0.020% … (bounds x 188-965, y 1-90)`, код 1 — экспозиция +5 % (окно, max Δ 10);
+второй кадр `stock_final2`: `0.010% … (bounds x 194-223, y 6-13)` — только строки консоли, там же, где `noise-diff`
+(код 1: строк на пиксели больше, чем в N); с `mat_force_tonemap_scale 1` против такого же кадра спайка без DLL —
+`0.002%`, код 0. Сборка стоковая; N занижает шум экспозиции (см. процедуру кадра).
+
+**Почему A.** Подмена по имени работает без правок материалов: движок грузит DLL из `bin/x64` и отдаёт ей все 687
+материалов `LightmappedGeneric`, включая стены; копия рисует вне бокса то же, что стоковый шейдер; вырез и `clip` работают.
+Вариант B (`HC_LightmappedGeneric` + `SetShader`) не проверялся — не понадобился.
+
 ## Проверка
 
 - **Юнит-тесты Minecraft** (`make mc`: gradle build вместе с тестами): см. раздел Minecraft.
