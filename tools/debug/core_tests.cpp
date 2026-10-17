@@ -21,6 +21,7 @@
 #include "core/hc_dig_clip.h"
 #include "core/hc_dig_mask.h"
 #include "core/hc_dig_void.h"
+#include "core/hc_dug_cells.h"
 
 using namespace halfcraft;
 
@@ -746,6 +747,105 @@ namespace
 		CHECK(i == 5 && j == 7 && k == 9);
 		CHECK(b.texel(965, 41, -73, u, v) && u == (k % 8) * 128 + i && v == (k / 8) * 128 + j);
 	}
+
+	void test_dug_cells()
+	{
+		// section (-1, 0, 2) (blocks from -16, 0, 32): bit 0 is block (0, 0, 0) of it, bit 561 (byte 70, bit 1) block (1, 2, 3)
+		std::uint8_t bits[512] = {};
+		bits[0] = 1u;
+		bits[70] = 1u << 1;
+		DugCells          cells;
+		std::vector<Cell> changed;
+		cells.set(-1, 0, 2, bits, changed);
+		CHECK(changed.size() == 2);
+		CHECK(cells.count() == 2);
+		CHECK(cells.dug(-16, 0, 32) && cells.dug(-15, 2, 35));
+		CHECK(!cells.dug(-16, 0, 33) && !cells.dug(0, 0, 32));
+
+		// the same mask changes nothing; a cell filled again is the one change
+		changed.clear();
+		cells.set(-1, 0, 2, bits, changed);
+		CHECK(changed.empty());
+		bits[70] = 0;
+		cells.set(-1, 0, 2, bits, changed);
+		CHECK(changed == (std::vector<Cell>{ { -15, 2, 35 } }));
+		CHECK(cells.count() == 1);
+
+		// a box only touching a cell doesn't have it; one inside it does
+		std::vector<Cell> in;
+		const float       touch_lo[3] = { -15, 0, 32 }, touch_hi[3] = { -14, 1, 33 };
+		cells.cells_in(touch_lo, touch_hi, in);
+		CHECK(in.empty());
+		const float inside_lo[3] = { -15.5f, .5f, 32.5f }, inside_hi[3] = { -15.4f, .6f, 32.6f };
+		cells.cells_in(inside_lo, inside_hi, in);
+		CHECK(in == (std::vector<Cell>{ { -16, 0, 32 } }));
+
+		// no mask: the section has nothing dug
+		changed.clear();
+		cells.set(-1, 0, 2, nullptr, changed);
+		CHECK(changed.size() == 1);
+		CHECK(cells.count() == 0);
+
+		// cells around (0.5, 0.5, 0.5): (1, 0, 0) and (5, 0, 0) and (0, 0, 10) in section (0, 0, 0), (32, 0, 0) in (2, 0, 0)
+		std::uint8_t near_bits[512] = {}, far_bits[512] = {};
+		near_bits[0] = 1u << 5 | 1u << 1;
+		near_bits[20] = 1u;
+		far_bits[0] = 1u;
+		cells.set(0, 0, 0, near_bits, changed);
+		cells.set(2, 0, 0, far_bits, changed);
+		std::vector<Cell> nearest;
+		cells.nearest({ .5, .5, .5 }, 24.0, 2, nearest);
+		CHECK(nearest == (std::vector<Cell>{ { 1, 0, 0 }, { 5, 0, 0 } }));
+		cells.nearest({ .5, .5, .5 }, 24.0, 64, nearest);
+		CHECK(nearest.size() == 3 && nearest[2] == (Cell{ 0, 0, 10 }));
+
+		// a source box is dug when every cell its volume reaches into is (slot 1, grid at source z 16: cell (1025, 0, -1)
+		// is source x 40..80, y 0..40, z 16..56)
+		const MapSlot slot{ 1, 16.0f };
+		std::uint8_t  column[512] = {};
+		column[(1 + 16 * 15) / 8] = 1u << ((1 + 16 * 15) % 8);              // block (1, 0, 15) of section (64, 0, -1)
+		column[(1 + 16 * 15 + 256) / 8] = 1u << ((1 + 16 * 15 + 256) % 8);  // and the one above it
+		cells.set(64, 0, -1, column, changed);
+		const auto  dug_cell = [&cells](int x, int y, int z) { return cells.dug(x, y, z); };
+		const float in_lo[3] = { 44, 4, 17 }, in_hi[3] = { 76, 36, 96 };
+		CHECK(source_box_dug(in_lo, in_hi, slot, dug_cell));
+		const float edge_lo[3] = { 40, 0, 16 }, edge_hi[3] = { 80, 40, 96 };  // exactly the two cells
+		CHECK(source_box_dug(edge_lo, edge_hi, slot, dug_cell));
+		const float over_lo[3] = { 44, 4, 17 }, over_hi[3] = { 81, 36, 56 };  // a unit into cell (1026, 0, -1)
+		CHECK(!source_box_dug(over_lo, over_hi, slot, dug_cell));
+		const float up_lo[3] = { 44, 4, 17 }, up_hi[3] = { 76, 36, 97 };  // a unit into cell (1025, 2, -1)
+		CHECK(!source_box_dug(up_lo, up_hi, slot, dug_cell));
+	}
+
+	void test_triangle_clip()
+	{
+		const float                     lo[3] = { 0, 0, 0 }, hi[3] = { 1, 1, 1 };
+		std::vector<ColPrimitives::Tri> out;
+
+		// a big triangle over the box's middle: what's left is the square of it in the box, wound and flagged as it was
+		clip_triangle({ { -4, .5f, -4, -4, .5f, 8, 8, .5f, -4 }, 0x305u }, lo, hi, out);
+		CHECK(!out.empty());
+		float area = 0.0f;
+		for (const auto& tri : out) {
+			CHECK(tri.flags == 0x305u);
+			for (int k = 0; k < 9; ++k) {
+				CHECK(tri.v[k] >= -1e-5f && tri.v[k] <= 1.0f + 1e-5f);
+			}
+			const auto n = triangle_normal(tri.v);
+			CHECK(n[1] > 1e-6f);
+			area += length(n) / 2.0f;
+		}
+		CHECK(near(area, 1.0f, 1e-4f));
+
+		// one inside the box is itself; one outside it is nothing
+		const ColPrimitives::Tri inside{ { .25f, .25f, .25f, .25f, .25f, .75f, .75f, .25f, .25f }, 0 };
+		out.clear();
+		clip_triangle(inside, lo, hi, out);
+		CHECK(out.size() == 1 && std::equal(inside.v, inside.v + 9, out[0].v) && out[0].flags == 0);
+		out.clear();
+		clip_triangle({ { 2, .5f, 0, 2, .5f, 1, 3, .5f, 0 }, 0 }, lo, hi, out);
+		CHECK(out.empty());
+	}
 }
 
 int run_tests()
@@ -767,6 +867,8 @@ int run_tests()
 	test_void_region_finds_the_rock_behind_the_walls();
 	test_void_region_tests_a_convex_by_its_planes();
 	test_dig_mask_layout_places_the_cells_in_the_texture();
+	test_dug_cells();
+	test_triangle_clip();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;

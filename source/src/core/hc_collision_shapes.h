@@ -274,6 +274,58 @@ namespace halfcraft
 		}
 	}
 
+	/// the part of a triangle inside the box [lo, hi], appended to out as triangles with its winding and flags: its
+	/// polygon cut by the box's six planes in turn (sutherland-hodgman: a corner on a plane is inside, an edge gets a new
+	/// corner only where it crosses one, as SkyCraft's Clip::Split), fanned from the first corner without the slivers
+	/// (|e1 x e2| < 1e-6). nothing when it misses the box.
+	inline void clip_triangle(const ColPrimitives::Tri& tri, const float lo[3], const float hi[3], std::vector<ColPrimitives::Tri>& out)
+	{
+		using namespace voxel_detail;
+		using Corner = std::array<float, 3>;
+		// each plane adds a corner at most to a convex polygon: a triangle ends with 9. the rest is room for rounding
+		constexpr std::size_t           MAX_CORNERS = 32;
+		std::array<Corner, MAX_CORNERS> poly{}, next{};
+		std::size_t                     count = 3;
+		for (std::size_t c = 0; c < 3; ++c) {
+			poly[c] = { tri.v[c * 3], tri.v[c * 3 + 1], tri.v[c * 3 + 2] };
+		}
+		for (std::size_t plane = 0; plane < 6 && count >= 3; ++plane) {
+			const std::size_t axis = plane / 2;
+			const bool        upper = plane % 2 == 1;
+			const float       bound = upper ? hi[axis] : lo[axis];
+			// how far out of the box a corner lies past this plane (on it: 0, inside)
+			const auto  outside = [axis, upper, bound](const Corner& c) { return upper ? c[axis] - bound : bound - c[axis]; };
+			std::size_t kept = 0;
+			for (std::size_t i = 0; i < count && kept < MAX_CORNERS; ++i) {
+				const Corner& a = poly[i];
+				const Corner& b = poly[(i + 1) % count];
+				const float   da = outside(a), db = outside(b);
+				if (da <= 0.0f) {
+					next[kept++] = a;
+				}
+				if (((da < 0.0f && db > 0.0f) || (da > 0.0f && db < 0.0f)) && kept < MAX_CORNERS) {
+					const float t = da / (da - db);
+					Corner      cut = { a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t };
+					cut[axis] = bound;  // on the plane exactly, whatever the rounding
+					next[kept++] = cut;
+				}
+			}
+			poly.swap(next);
+			count = kept;
+		}
+		for (std::size_t i = 1; i + 1 < count; ++i) {
+			ColPrimitives::Tri piece{ { poly[0][0], poly[0][1], poly[0][2], poly[i][0], poly[i][1], poly[i][2], poly[i + 1][0], poly[i + 1][1], poly[i + 1][2] },
+				tri.flags };
+			float              e1[3], e2[3], n[3];
+			sub(piece.v + 3, piece.v, e1);
+			sub(piece.v + 6, piece.v, e2);
+			cross(e1, e2, n);
+			if (std::sqrt(dot(n, n)) >= 1e-6f) {
+				out.push_back(piece);
+			}
+		}
+	}
+
 	/// the occupancy of region (rx, ry, rz), from everything gathered for it (with the half block of
 	/// slack the streamer gathers around a region).
 	///
