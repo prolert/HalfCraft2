@@ -14,9 +14,11 @@
 #include <exception>
 #include <vector>
 
+#include "core/hc_bsp_tree.h"
 #include "core/hc_collision_shapes.h"
 #include "core/hc_dig_material.h"
 #include "core/hc_dig_clip.h"
+#include "core/hc_dig_void.h"
 
 using namespace halfcraft;
 
@@ -483,6 +485,165 @@ namespace
 		subtract_boxes(cube(2, 4), { { { 2.01f, 2, 2 }, { 3, 3, 3 } } }, cut, pieces);
 		CHECK(pieces.size() == 4);
 	}
+
+	/// the box (x0, y0, z0)-(x1, y1, z1) as a convex: its planes are +x, -x, +y, -y, +z, -z
+	Cvx box_convex(float x0, float y0, float z0, float x1, float y1, float z1, std::uint32_t flags)
+	{
+		Cvx cvx;
+		cvx.planes.push_back({ 1, 0, 0, -x1 });
+		cvx.planes.push_back({ -1, 0, 0, x0 });
+		cvx.planes.push_back({ 0, 1, 0, -y1 });
+		cvx.planes.push_back({ 0, -1, 0, y0 });
+		cvx.planes.push_back({ 0, 0, 1, -z1 });
+		cvx.planes.push_back({ 0, 0, -1, z0 });
+		cvx.lo[0] = x0, cvx.lo[1] = y0, cvx.lo[2] = z0;
+		cvx.hi[0] = x1, cvx.hi[1] = y1, cvx.hi[2] = z1;
+		cvx.flags = flags;
+		return cvx;
+	}
+
+	/// a tree of one plane (n.p = dist): empty in front of it, solid behind it
+	BspTree one_plane(float nx, float ny, float nz, float dist)
+	{
+		BspTree tree;
+		tree.planes.push_back({ nx, ny, nz, dist });
+		tree.nodes.push_back({ 0, -1, -2 });
+		tree.leaf_contents = { 0, BSP_CONTENTS_SOLID };
+		return tree;
+	}
+
+	/// the contents of the tree at source point (0, 0, z)
+	int contents_at(const BspTree& tree, float z)
+	{
+		const float p[3] = { 0.0f, 0.0f, z };
+		return point_contents(tree, p);
+	}
+
+	void test_bsp_tree_gives_a_points_contents()
+	{
+		const BspTree t = one_plane(0, 0, 1, 106);
+		CHECK(contents_at(t, 120) == 0);
+		CHECK(contents_at(t, 80) == BSP_CONTENTS_SOLID);
+		CHECK(contents_at(t, 106) == 0);  // on the plane: in front of it
+		CHECK(contents_at(BspTree{}, 80) == 0);
+
+		// a plane that isn't along an axis takes the dot product: 0.6x + 0.8z = 100 here
+		const BspTree slanted = one_plane(0.6f, 0, 0.8f, 100);
+		const float   front[3] = { 100, 0, 100 }, back[3] = { 20, 0, 50 };
+		CHECK(point_contents(slanted, front) == 0);
+		CHECK(point_contents(slanted, back) == BSP_CONTENTS_SOLID);
+
+		// two nodes: the first's back is solid, its front goes on to a plane of x
+		BspTree two = t;
+		two.planes.push_back({ 1, 0, 0, 0 });
+		two.nodes[0] = { 0, 1, -2 };
+		two.nodes.push_back({ 1, -1, -2 });
+		const float east[3] = { 5, 0, 120 }, west[3] = { -5, 0, 120 }, under[3] = { 5, 0, 80 };
+		CHECK(point_contents(two, east) == 0);
+		CHECK(point_contents(two, west) == BSP_CONTENTS_SOLID);
+		CHECK(point_contents(two, under) == BSP_CONTENTS_SOLID);
+
+		// a head node that is a leaf
+		BspTree leaf = t;
+		leaf.headnode = -2;
+		CHECK(contents_at(leaf, 120) == BSP_CONTENTS_SOLID);
+
+		// a damaged tree reads as empty, and never loops
+		BspTree broken = t;
+		broken.nodes[0][2] = -5;  // a leaf it doesn't have
+		CHECK(contents_at(broken, 80) == 0);
+		broken = t;
+		broken.nodes[0][1] = 3;  // a node it doesn't have
+		CHECK(contents_at(broken, 120) == 0);
+		broken = t;
+		broken.nodes[0][0] = 7;  // a plane it doesn't have
+		CHECK(contents_at(broken, 80) == 0);
+		broken = t;
+		broken.nodes[0] = { 0, 0, 0 };  // a loop
+		CHECK(contents_at(broken, 80) == 0);
+		broken = t;
+		broken.headnode = 4;
+		CHECK(contents_at(broken, 80) == 0);
+		broken.headnode = -9;
+		CHECK(contents_at(broken, 80) == 0);
+	}
+
+	void test_void_region_finds_the_rock_behind_the_walls()
+	{
+		const MapSlot slot{ 1, 16.0f };
+		// the region (128, 0, 0) is source x 0..320, z 16..336 (block bx + 8bz + 64by); a dug wall makes its box diggable
+		ColPrimitives prims;
+		prims.convexes.push_back(box_convex(1024, 0, 0, 1024.25f, 1, 1, PRIM_DIGGABLE));  // block 0, sub-voxels x 0 and 1
+		const float         x0[3] = { 1027, 1029, 1030 };  // blocks 35, 37 and 38
+		const std::uint32_t flags[3] = { PRIM_DIGGABLE, PRIM_SKY, 0 };
+		for (int k = 0; k < 3; ++k) {
+			prims.convexes.push_back(box_convex(x0[k], 0, 4, x0[k] + 1, 1, 5, flags[k]));
+		}
+
+		// solid below minecraft y 2.25
+		RegionVoid out;
+		void_region(prims, one_plane(0, 0, 1, 106), slot, 128, 0, 0, out);
+		CHECK(out.any());
+		for (int block = 0; block < 512; ++block) {
+			std::uint8_t want = VOID_ALL;
+			if (block == 0 || (block >= 128 && block < 192)) {
+				want = VOID_SOME;
+			} else if (block == 35 || block == 37 || block >= 192) {
+				want = VOID_NONE;
+			}
+			CHECK(out.kind[static_cast<std::size_t>(block)] == want);
+		}
+		if (CHECK(out.layers.size() == 65u)) {
+			// block 0 is void but for its diggable sub-voxels x 0 and 1; block 128 is void in its two lowest layers
+			for (const std::uint64_t row : out.layers[0]) {
+				CHECK(row == 0xFCFCFCFCFCFCFCFCull);
+			}
+			CHECK(out.layers[1][0] == ~0ull && out.layers[1][1] == ~0ull);
+			for (int y = 2; y < 8; ++y) {
+				CHECK(out.layers[1][y] == 0);
+			}
+		}
+
+		// solid west of source x 100 (minecraft x 1026.5), no brushes
+		void_region(ColPrimitives{}, one_plane(1, 0, 0, 100), slot, 128, 0, 0, out);
+		CHECK(out.kind[0] == VOID_ALL && out.kind[1] == VOID_ALL);
+		CHECK(out.kind[2] == VOID_SOME);
+		CHECK(out.kind[3] == VOID_NONE);
+		if (CHECK(out.layers.size() == 64u)) {
+			for (const std::uint64_t row : out.layers[0]) {
+				CHECK(row == 0x0F0F0F0F0F0F0F0Full);
+			}
+		}
+
+		// no solid leaf anywhere: out is reset
+		void_region(prims, BspTree{}, slot, 128, 0, 0, out);
+		CHECK(!out.any() && out.layers.empty());
+	}
+
+	void test_void_region_tests_a_convex_by_its_planes()
+	{
+		// the half of block 0 with x + z <= 1025 (a wedge, its bounds the whole block) is the wall's: the rest is void
+		Cvx wedge = box_convex(1024, 0, 0, 1025, 1, 1, PRIM_DIGGABLE);
+		wedge.planes.push_back({ 1, 0, 1, -1025 });
+		ColPrimitives prims;
+		prims.convexes.push_back(wedge);
+		RegionVoid out;
+		void_region(prims, one_plane(0, 0, 1, 106), MapSlot{ 1, 16.0f }, 128, 0, 0, out);
+		CHECK(out.kind[0] == VOID_SOME);
+		if (CHECK(out.layers.size() > 0u)) {
+			std::uint64_t want = 0;  // sub-voxel (x, z) is void where its centre has (x + z + 1) / 8 > 1
+			for (int z = 0; z < 8; ++z) {
+				for (int x = 0; x < 8; ++x) {
+					if (x + z >= 8) {
+						want |= 1ull << (z * 8 + x);
+					}
+				}
+			}
+			for (const std::uint64_t row : out.layers[0]) {
+				CHECK(row == want);
+			}
+		}
+	}
 }
 
 int run_tests()
@@ -498,6 +659,9 @@ int run_tests()
 	test_subtract_boxes_leaves_what_it_doesnt_cut();
 	test_subtract_boxes_keeps_each_piece_within_its_bounds();
 	test_subtract_boxes_drops_slivers();
+	test_bsp_tree_gives_a_points_contents();
+	test_void_region_finds_the_rock_behind_the_walls();
+	test_void_region_tests_a_convex_by_its_planes();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;
