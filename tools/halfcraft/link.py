@@ -9,6 +9,7 @@ from halfcraft import ToolError
 from halfcraft.protocol import Schema
 
 MESSAGE_HEADER = struct.Struct("<II")  # ColMsgHeader: type, payload bytes
+VOID_KIND_BYTES = 512  # kColVoid's u8 kind[512] after its ColRegion: a VoidKind for each block of the region's 8x8x8
 
 
 def open_link(schema: Schema, name: str | None = None) -> mmap.mmap:
@@ -54,9 +55,14 @@ class CollisionRing:
         self.head = struct.unpack_from("<Q", link, ring + int(schema.value("kColRingHeadOff")))[0]
         self.tail = struct.unpack_from("<Q", link, ring + int(schema.value("kColRingTailOff")))[0]
         self.pad, self.clear, self.region, self.tris = (int(schema.value(name)) for name in ("kColPad", "kColClear", "kColRegion", "kColTris"))
+        self.void = int(schema.value("kColVoid"))
         region = schema.structs["ColRegion"]
         self.region_bytes, self.count_at = region.size, region.field("count").offset
-        self.item_bytes = {self.region: schema.structs["ColBlock"].size, self.tris: schema.structs["ColTri"].size}
+        self.item_bytes = {
+            self.region: schema.structs["ColBlock"].size,
+            self.tris: schema.structs["ColTri"].size,
+            self.void: schema.structs["ColBlock"].field("bits").size,
+        }
         self.kept_from = 0  # where what it holds starts (head - kept_from bytes of messages)
 
     def plausible(self, offset: int) -> int | None:
@@ -72,7 +78,8 @@ class CollisionRing:
             fits = size == 4
         elif kind in self.item_bytes:
             count = struct.unpack_from("<I", self.link, self.data + offset + MESSAGE_HEADER.size + self.count_at)[0] if size >= self.region_bytes else -1
-            fits = size == self.region_bytes + count * self.item_bytes[kind]
+            fixed = self.region_bytes + (VOID_KIND_BYTES if kind == self.void else 0)
+            fits = size == fixed + count * self.item_bytes[kind]
         else:
             fits = False
         return (MESSAGE_HEADER.size + size + 7) & ~7 if fits else None

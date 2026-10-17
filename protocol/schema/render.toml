@@ -44,6 +44,12 @@ RenSolids + two 512-byte bitsets (bit x + 16z + 256y): which blocks of a
 section the host's characters collide with, then which of those the host's gravity gun
 may tear out (kInTakeBlock: whole cubes without a block entity, softer than obsidian).
 Sent after its kRenSection; count 0: none, and no bitsets follow""" }
+kRenDug = { value = 11, doc = """
+RenDug + a 512-byte bitset (bit x + 16z + 256y): which blocks of a section
+Minecraft has dug out of the host's map (its halfcraft:dug attachment): the host
+stops drawing its walls there and cuts them out of the collision it sends.
+Sent after its kRenSection and whenever they change; count 0: none, and no
+bitset follows. kRenClearAll drops them too""" }
 
 [enums.RagdollPart]
 type = "u32"
@@ -79,6 +85,11 @@ kHazardMagma = { value = 3, doc = "magma block: hurts what stands on top of it" 
 [structs.RenSolids.fields]
 "sx, sy, sz" = { type = "i32", doc = "section coords, as in RenSection" }
 count = { type = "u32", doc = "solid blocks (0: none, and no bitset follows)" }
+
+[structs.RenDug]
+[structs.RenDug.fields]
+"sx, sy, sz" = { type = "i32", doc = "section coords, as in RenSection" }
+count = { type = "u32", doc = "dug blocks (0: none, and no bitset follows)" }
 
 [structs.RenLights]
 [structs.RenLights.fields]

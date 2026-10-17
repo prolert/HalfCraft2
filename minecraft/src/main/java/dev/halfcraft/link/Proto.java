@@ -10,7 +10,7 @@ public final class Proto {
 
 	// a hash of the layout below but its comments: the host writes it into the header, and Minecraft links only
 	// with a host built from the same schema
-	public static final int LAYOUT = 0x0E992381;
+	public static final int LAYOUT = 0x9064AE03;
 
 	// ---- where each part of the mapping is
 	public static final long OFF_HEADER = 0x00;
@@ -73,6 +73,7 @@ public final class Proto {
 	public static final int HOST_MENU_OPEN = 1 << 1; // a host menu (or console) owns input; MC should drop held keys
 	public static final int HOST_LOADING = 1 << 2; // loading screen / level transition in progress
 	public static final int HOST_SEATED = 1 << 3; // in a vehicle's seat (with HOST_TAKEOVER): Minecraft's body sits, facing seatYaw
+	public static final int HOST_DIG_OFF = 1 << 4; // hc_dig 0, or no shader DLL: Minecraft digs no new holes in the host's map (dug ones stay)
 	// source moves the player itself (a ladder, a lift or train, a vehicle, a scripted scene): Minecraft's
 	// player stays at posX/Y/Z every tick, without falling or fall damage, until the hand-back's teleport
 	public static final int HOST_TAKEOVER = 1 << 7;
@@ -648,13 +649,36 @@ public final class Proto {
 	public static final int COL_CLEAR = 1; // payload: u32 epoch
 	public static final int COL_REGION = 2; // payload: ColRegion + ColBlock[count]
 	public static final int COL_TRIS = 3; // payload: ColRegion (count = triangles) + ColTri[count]; sent before COL_REGION
+	// payload: ColRegion (count = its VOID_SOME blocks) + u8 kind[512], the VoidKind of block
+	// bx + 8 * bz + 64 * by of the region, then u64 bits[8] for each VOID_SOME block in that order
+	// (bits[y] bit z * 8 + x, as in ColBlock). Sent before the region's COL_REGION when any of its
+	// blocks has void; a COL_REGION without one before it means none
+	public static final int COL_VOID = 4;
 
 	// ColTriFlags
 	public static final int TRI_STAIR_HELPER = 1 << 0; // an invisible stair ramp: walkable, never a wall
 	public static final int TRI_SKY = 1 << 1; // a brush of the map's sky (its skybox ceiling): what's under it is out in the open
+	public static final int TRI_DIGGABLE = 1 << 2; // a face of a world brush (not the sky's) that Minecraft can dig out
+	// bits 8-15: the face's DigMaterial, with TRI_DIGGABLE
+
+	// DigMaterial
+	// the Minecraft block a diggable face (TRI_DIGGABLE) breaks like and drops, from its surface's game material
+	public static final int DIG_NONE = 0; // none given: a diggable face with it digs as DIG_STONE
+	public static final int DIG_STONE = 1; // minecraft:stone: concrete (C) and every other game material
+	public static final int DIG_STONE_BRICKS = 2; // minecraft:stone_bricks: tile (T)
+	public static final int DIG_IRON = 3; // minecraft:iron_block: metal, grate, vent, computer (M G V P)
+	public static final int DIG_PLANKS = 4; // minecraft:oak_planks: wood (W; U too, which Half-Life 2 doesn't use)
+	public static final int DIG_DIRT = 5; // minecraft:dirt: dirt (D), which Half-Life 2's cardboard and paper surfaces are too
+	public static final int DIG_GLASS = 6; // minecraft:glass: glass (Y)
 
 	// ColBlockFlags
 	public static final int COL_BLOCK_SKY = 1 << 0; // all of it is the map's sky (TRI_SKY): no roof over what's under it
+
+	// VoidKind
+	// how much of a block is void (COL_VOID): in a solid leaf of the map's BSP tree and in no world brush, out of the map
+	public static final int VOID_NONE = 0;
+	public static final int VOID_ALL = 1; // all of it
+	public static final int VOID_SOME = 2; // some of it: its sub-voxels follow
 
 	// ColTri: offsets in it
 	// Exact host collision triangle (MC space) for the player's smooth collider.
@@ -724,6 +748,12 @@ public final class Proto {
 	// may tear out (IN_TAKE_BLOCK: whole cubes without a block entity, softer than obsidian).
 	// Sent after its REN_SECTION; count 0: none, and no bitsets follow
 	public static final int REN_SOLIDS = 10;
+	// RenDug + a 512-byte bitset (bit x + 16z + 256y): which blocks of a section
+	// Minecraft has dug out of the host's map (its halfcraft:dug attachment): the host
+	// stops drawing its walls there and cuts them out of the collision it sends.
+	// Sent after its REN_SECTION and whenever they change; count 0: none, and no
+	// bitset follows. REN_CLEAR_ALL drops them too
+	public static final int REN_DUG = 11;
 
 	// RagdollPart
 	public static final int PART_NONE = 0;
@@ -752,6 +782,13 @@ public final class Proto {
 	public static final long REN_SOLIDS_SZ = 0x08;
 	public static final long REN_SOLIDS_COUNT = 0x0C; // solid blocks (0: none, and no bitset follows)
 	public static final int REN_SOLIDS_BYTES = 0x10;
+
+	// RenDug: offsets in it
+	public static final long REN_DUG_SX = 0x00; // section coords, as in RenSection
+	public static final long REN_DUG_SY = 0x04;
+	public static final long REN_DUG_SZ = 0x08;
+	public static final long REN_DUG_COUNT = 0x0C; // dug blocks (0: none, and no bitset follows)
+	public static final int REN_DUG_BYTES = 0x10;
 
 	// RenLights: offsets in it
 	public static final long REN_LIGHTS_SX = 0x00; // section coords, as in RenSection

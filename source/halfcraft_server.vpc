@@ -64,9 +64,12 @@ $Project
 			{
 				$File	"$HALFCRAFTPROTO\halfcraft_protocol.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_atomic.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_bsp_tree.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_campaign.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_collision.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_collision_shapes.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_dig_material.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_dig_void.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_grid.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_link.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_log.h"

@@ -23,6 +23,7 @@ kHostInGame = { bit = 0, doc = "a map is loaded and the player exists" }
 kHostMenuOpen = { bit = 1, doc = "a host menu (or console) owns input; MC should drop held keys" }
 kHostLoading = { bit = 2, doc = "loading screen / level transition in progress" }
 kHostSeated = { bit = 3, doc = "in a vehicle's seat (with kHostTakeover): Minecraft's body sits, facing seatYaw" }
+kHostDigOff = { bit = 4, doc = "hc_dig 0, or no shader DLL: Minecraft digs no new holes in the host's map (dug ones stay)" }
 kHostTakeover = { bit = 7, doc = """
 source moves the player itself (a ladder, a lift or train, a vehicle, a scripted scene): Minecraft's
 player stays at posX/Y/Z every tick, without falling or fall damage, until the hand-back's teleport""" }

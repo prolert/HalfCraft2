@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "hc_dig_material.h"
+#include "hc_dig_void.h"
 #include "hc_log.h"
 
 namespace halfcraft
@@ -300,6 +302,17 @@ namespace halfcraft
 	}
 
 	static_assert(PRIM_SKY == proto::kTriSky);
+	static_assert(PRIM_DIGGABLE == proto::kTriDiggable);
+	static_assert(static_cast<int>(DIG_NONE) == proto::kDigNone);
+	static_assert(static_cast<int>(DIG_STONE) == proto::kDigStone);
+	static_assert(static_cast<int>(DIG_STONE_BRICKS) == proto::kDigStoneBricks);
+	static_assert(static_cast<int>(DIG_IRON) == proto::kDigIron);
+	static_assert(static_cast<int>(DIG_PLANKS) == proto::kDigPlanks);
+	static_assert(static_cast<int>(DIG_DIRT) == proto::kDigDirt);
+	static_assert(static_cast<int>(DIG_GLASS) == proto::kDigGlass);
+	static_assert(VOID_NONE == proto::kVoidNone);
+	static_assert(VOID_ALL == proto::kVoidAll);
+	static_assert(VOID_SOME == proto::kVoidSome);
 
 	void CollisionStreamer::voxelize(const Job& job)
 	{

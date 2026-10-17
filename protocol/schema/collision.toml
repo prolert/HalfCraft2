@@ -22,19 +22,48 @@ kColPad = 0
 kColClear = { value = 1, doc = "payload: u32 epoch" }
 kColRegion = { value = 2, doc = "payload: ColRegion + ColBlock[count]" }
 kColTris = { value = 3, doc = "payload: ColRegion (count = triangles) + ColTri[count]; sent before kColRegion" }
+kColVoid = { value = 4, doc = """
+payload: ColRegion (count = its kVoidSome blocks) + u8 kind[512], the VoidKind of block
+bx + 8 * bz + 64 * by of the region, then u64 bits[8] for each kVoidSome block in that order
+(bits[y] bit z * 8 + x, as in ColBlock). Sent before the region's kColRegion when any of its
+blocks has void; a kColRegion without one before it means none""" }
 
 [enums.ColTriFlags]
 type = "u32"
+note = "bits 8-15: the face's DigMaterial, with kTriDiggable"
 
 [enums.ColTriFlags.items]
 kTriStairHelper = { bit = 0, doc = "an invisible stair ramp: walkable, never a wall" }
 kTriSky = { bit = 1, doc = "a brush of the map's sky (its skybox ceiling): what's under it is out in the open" }
+kTriDiggable = { bit = 2, doc = "a face of a world brush (not the sky's) that Minecraft can dig out" }
+
+[enums.DigMaterial]
+type = "u8"
+doc = "the Minecraft block a diggable face (kTriDiggable) breaks like and drops, from its surface's game material"
+
+[enums.DigMaterial.items]
+kDigNone = { value = 0, doc = "none given: a diggable face with it digs as kDigStone" }
+kDigStone = { value = 1, doc = "minecraft:stone: concrete (C) and every other game material" }
+kDigStoneBricks = { value = 2, doc = "minecraft:stone_bricks: tile (T)" }
+kDigIron = { value = 3, doc = "minecraft:iron_block: metal, grate, vent, computer (M G V P)" }
+kDigPlanks = { value = 4, doc = "minecraft:oak_planks: wood (W; U too, which Half-Life 2 doesn't use)" }
+kDigDirt = { value = 5, doc = "minecraft:dirt: dirt (D), which Half-Life 2's cardboard and paper surfaces are too" }
+kDigGlass = { value = 6, doc = "minecraft:glass: glass (Y)" }
 
 [enums.ColBlockFlags]
 type = "u32"
 
 [enums.ColBlockFlags.items]
 kColBlockSky = { bit = 0, doc = "all of it is the map's sky (kTriSky): no roof over what's under it" }
+
+[enums.VoidKind]
+type = "u8"
+doc = "how much of a block is void (kColVoid): in a solid leaf of the map's BSP tree and in no world brush, out of the map"
+
+[enums.VoidKind.items]
+kVoidNone = 0
+kVoidAll = { value = 1, doc = "all of it" }
+kVoidSome = { value = 2, doc = "some of it: its sub-voxels follow" }
 
 [structs.ColTri]
 size = 40

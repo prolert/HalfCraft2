@@ -9,7 +9,7 @@ namespace halfcraft::proto
 {
 	// a hash of the layout below but its comments: the host writes it into the header, and Minecraft links only
 	// with a host built from the same schema
-	inline constexpr std::uint32_t kLayout = 0x0E992381;
+	inline constexpr std::uint32_t kLayout = 0x9064AE03;
 
 	// ---- where each part of the mapping is ----------------------------------------------------------
 	inline constexpr std::uint64_t kOffHeader = 0x00;
@@ -75,6 +75,7 @@ namespace halfcraft::proto
 		kHostMenuOpen = 1u << 1,  // a host menu (or console) owns input; MC should drop held keys
 		kHostLoading = 1u << 2,   // loading screen / level transition in progress
 		kHostSeated = 1u << 3,    // in a vehicle's seat (with kHostTakeover): Minecraft's body sits, facing seatYaw
+		kHostDigOff = 1u << 4,    // hc_dig 0, or no shader DLL: Minecraft digs no new holes in the host's map (dug ones stay)
 		// source moves the player itself (a ladder, a lift or train, a vehicle, a scripted scene): Minecraft's
 		// player stays at posX/Y/Z every tick, without falling or fall damage, until the hand-back's teleport
 		kHostTakeover = 1u << 7,
@@ -713,17 +714,44 @@ namespace halfcraft::proto
 		kColClear = 1,   // payload: u32 epoch
 		kColRegion = 2,  // payload: ColRegion + ColBlock[count]
 		kColTris = 3,    // payload: ColRegion (count = triangles) + ColTri[count]; sent before kColRegion
+		// payload: ColRegion (count = its kVoidSome blocks) + u8 kind[512], the VoidKind of block
+		// bx + 8 * bz + 64 * by of the region, then u64 bits[8] for each kVoidSome block in that order
+		// (bits[y] bit z * 8 + x, as in ColBlock). Sent before the region's kColRegion when any of its
+		// blocks has void; a kColRegion without one before it means none
+		kColVoid = 4,
 	};
 
 	enum ColTriFlags : std::uint32_t
 	{
 		kTriStairHelper = 1u << 0,  // an invisible stair ramp: walkable, never a wall
 		kTriSky = 1u << 1,          // a brush of the map's sky (its skybox ceiling): what's under it is out in the open
+		kTriDiggable = 1u << 2,     // a face of a world brush (not the sky's) that Minecraft can dig out
+		// bits 8-15: the face's DigMaterial, with kTriDiggable
+	};
+
+	// the Minecraft block a diggable face (kTriDiggable) breaks like and drops, from its surface's game material
+	enum DigMaterial : std::uint8_t
+	{
+		kDigNone = 0,         // none given: a diggable face with it digs as kDigStone
+		kDigStone = 1,        // minecraft:stone: concrete (C) and every other game material
+		kDigStoneBricks = 2,  // minecraft:stone_bricks: tile (T)
+		kDigIron = 3,         // minecraft:iron_block: metal, grate, vent, computer (M G V P)
+		kDigPlanks = 4,       // minecraft:oak_planks: wood (W; U too, which Half-Life 2 doesn't use)
+		kDigDirt = 5,         // minecraft:dirt: dirt (D), which Half-Life 2's cardboard and paper surfaces are too
+		kDigGlass = 6,        // minecraft:glass: glass (Y)
 	};
 
 	enum ColBlockFlags : std::uint32_t
 	{
 		kColBlockSky = 1u << 0,  // all of it is the map's sky (kTriSky): no roof over what's under it
+	};
+
+	// how much of a block is void (kColVoid): in a solid leaf of the map's BSP tree and in no world brush, out of the map
+	enum VoidKind : std::uint8_t
+	{
+		kVoidNone = 0,
+		kVoidAll = 1,   // all of it
+		kVoidSome = 2,  // some of it: its sub-voxels follow
 	};
 
 	// Exact host collision triangle (MC space) for the player's smooth collider.
@@ -797,6 +825,12 @@ namespace halfcraft::proto
 		// may tear out (kInTakeBlock: whole cubes without a block entity, softer than obsidian).
 		// Sent after its kRenSection; count 0: none, and no bitsets follow
 		kRenSolids = 10,
+		// RenDug + a 512-byte bitset (bit x + 16z + 256y): which blocks of a section
+		// Minecraft has dug out of the host's map (its halfcraft:dug attachment): the host
+		// stops drawing its walls there and cuts them out of the collision it sends.
+		// Sent after its kRenSection and whenever they change; count 0: none, and no
+		// bitset follows. kRenClearAll drops them too
+		kRenDug = 11,
 	};
 
 	enum RagdollPart : std::uint32_t
@@ -832,6 +866,13 @@ namespace halfcraft::proto
 		std::uint32_t count;       // solid blocks (0: none, and no bitset follows)
 	};
 	static_assert(sizeof(RenSolids) == 0x10);
+
+	struct RenDug
+	{
+		std::int32_t  sx, sy, sz;  // section coords, as in RenSection
+		std::uint32_t count;       // dug blocks (0: none, and no bitset follows)
+	};
+	static_assert(sizeof(RenDug) == 0x10);
 
 	struct RenLights
 	{
