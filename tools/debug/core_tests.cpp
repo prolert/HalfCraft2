@@ -18,6 +18,7 @@
 #include "core/hc_collision_shapes.h"
 #include "core/hc_dig_material.h"
 #include "core/hc_dig_clip.h"
+#include "core/hc_dig_mask.h"
 #include "core/hc_dig_void.h"
 
 using namespace halfcraft;
@@ -644,6 +645,49 @@ namespace
 			}
 		}
 	}
+
+	void test_dig_mask_layout_places_the_cells_in_the_texture()
+	{
+		const DigMaskLayout a = DigMaskLayout::around(0.5, 70.2, -3.0);
+		CHECK(a.ox == -64 && a.oy == 32 && a.oz == -80);  // its centre is (0, 64, -16)
+		CHECK(!a.needs_recentre(0.5, 70.2, -3.0));
+
+		// recentred past 32 blocks along x or z, or 16 along y, from the centre
+		CHECK(!a.needs_recentre(32.0, 64, -16) && !a.needs_recentre(-32.0, 64, -16));
+		CHECK(a.needs_recentre(32.5, 64, -16) && a.needs_recentre(-32.5, 64, -16));
+		CHECK(!a.needs_recentre(0, 64, 16.0) && a.needs_recentre(0, 64, 16.5));
+		CHECK(!a.needs_recentre(0, 64, -48.0) && a.needs_recentre(0, 64, -48.5));
+		CHECK(!a.needs_recentre(0, 80.0, -16) && a.needs_recentre(0, 80.5, -16));
+		CHECK(!a.needs_recentre(0, 48.0, -16) && a.needs_recentre(0, 47.5, -16));
+
+		// a cell's texel: 64 layers of 128 x 128 in tiles of 8 x 8, the first layer's corner cell at (0, 0)
+		int u = -1, v = -1;
+		CHECK(a.texel(-64, 32, -80, u, v) && u == 0 && v == 0);
+		CHECK(a.texel(-59, 41, -73, u, v) && u == 133 && v == 135);
+		CHECK(a.texel(63, 95, 47, u, v) && u == 1023 && v == 1023);
+		CHECK(!a.texel(-65, 32, -80, u, v) && !a.texel(64, 32, -80, u, v));
+		CHECK(!a.texel(-64, 31, -80, u, v) && !a.texel(-64, 96, -80, u, v));
+		CHECK(!a.texel(-64, 32, -81, u, v) && !a.texel(-64, 32, 48, u, v));
+
+		// the shader's constants: a map in slot 1 (minecraft x 1024) with its grid at source z 16
+		const MapSlot       slot{ 1, 16.0f };
+		const DigMaskLayout b = DigMaskLayout::around(1030.5, 70.2, -3.0);
+		CHECK(b.ox == 960 && b.oy == 32 && b.oz == -80);
+		float origin[4], layout[4];
+		b.shader_constants(slot, origin, layout);
+		CHECK(origin[0] == -2560.0f && origin[1] == 3200.0f && origin[2] == 1296.0f);
+		CHECK(std::fabs(origin[3] - 0.025f) < 1e-7f);
+		CHECK(layout[0] == 1.0f / 1024.0f && layout[1] == 128.0f && layout[2] == 8.0f && layout[3] == 1.0f);
+
+		// the shader's arithmetic on a point of block (965, 41, -73) (the constants, then the distance over 40, floored) finds the cell that texel() puts at that block
+		float s[3];
+		mc_to_source(965.5, 41.5, -72.5, slot, s);
+		const int i = static_cast<int>(std::floor((s[0] - origin[0]) * origin[3]));
+		const int j = static_cast<int>(std::floor((origin[1] - s[1]) * origin[3]));
+		const int k = static_cast<int>(std::floor((s[2] - origin[2]) * origin[3]));
+		CHECK(i == 5 && j == 7 && k == 9);
+		CHECK(b.texel(965, 41, -73, u, v) && u == (k % 8) * 128 + i && v == (k / 8) * 128 + j);
+	}
 }
 
 int run_tests()
@@ -662,6 +706,7 @@ int run_tests()
 	test_bsp_tree_gives_a_points_contents();
 	test_void_region_finds_the_rock_behind_the_walls();
 	test_void_region_tests_a_convex_by_its_planes();
+	test_dig_mask_layout_places_the_cells_in_the_texture();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;
