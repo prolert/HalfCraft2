@@ -1,9 +1,9 @@
 #pragma once
 
 // the geometry half of the collision stream (core/hc_collision.h): solid shapes in minecraft space (half-life's
-// brushes turned into them), convex hulls turned into triangles, and a region's 8x8x8-per-block occupancy.
-// pure code, no engine and no link, so tools/debug/collision_check.cpp checks a map's .bsp offline with exactly
-// what server.dll runs.
+// brushes turned into them), convex hulls turned into triangles (and into their faces), and a region's
+// 8x8x8-per-block occupancy. pure code, no engine and no link, so tools/debug/collision_check.cpp checks a map's
+// .bsp offline with exactly what server.dll runs.
 
 #include <algorithm>
 #include <array>
@@ -20,6 +20,11 @@ namespace halfcraft
 	inline constexpr int REGION_VOXELS = COLLISION_REGION_SIZE * 8;  // voxels per region edge (64)
 	/// a primitive's flags (proto::ColTriFlags: its triangles keep them): one of the map's sky brushes
 	inline constexpr std::uint32_t PRIM_SKY = 1u << 1;
+	/// a face of a world brush that can be dug
+	inline constexpr std::uint32_t PRIM_DIGGABLE = 1u << 2;  // proto::kTriDiggable
+	/// bits 8-15 of a primitive's flags: the face's dig material (core/hc_dig_material.h, proto::DigMaterial)
+	inline constexpr int           PRIM_MATERIAL_SHIFT = 8;
+	inline constexpr std::uint32_t PRIM_MATERIAL_MASK = 0xFFu << PRIM_MATERIAL_SHIFT;
 
 	/// solid geometry in minecraft space.
 	struct ColPrimitives
@@ -34,6 +39,7 @@ namespace halfcraft
 			std::vector<std::array<float, 4>> planes;  // n.p + d <= 0 inside
 			float                             lo[3], hi[3];
 			std::uint32_t                     flags = 0;
+			std::vector<std::uint32_t>        plane_flags;  // empty, or one for each plane: its face's own flags (see face_flags)
 		};
 		std::vector<Tri>    tris;
 		std::vector<Convex> convexes;
@@ -107,6 +113,73 @@ namespace halfcraft
 			}
 			return true;
 		}
+
+		/// the face a convex's plane makes: a square big enough to span the convex, on the plane, cut down by all the
+		/// other planes. wound counter-clockwise seen from outside.
+		/// @param poly - its corners (empty when there's no face)
+		/// @param clipped - scratch for the cutting: a caller that goes over many faces allocates it once
+		/// @return false when the plane has no face: it's out of range or has no normal, or the others leave it less than a triangle
+		inline bool face_polygon(const ColPrimitives::Convex& cvx, std::size_t plane, std::vector<std::array<float, 3>>& poly, std::vector<std::array<float, 3>>& clipped)
+		{
+			poly.clear();
+			if (plane >= cvx.planes.size()) {
+				return false;
+			}
+			const float ex = cvx.hi[0] - cvx.lo[0], ey = cvx.hi[1] - cvx.lo[1], ez = cvx.hi[2] - cvx.lo[2];
+			const float diag = std::sqrt(ex * ex + ey * ey + ez * ez) + 1.0f;
+			const float mid[3] = { (cvx.lo[0] + cvx.hi[0]) * 0.5f, (cvx.lo[1] + cvx.hi[1]) * 0.5f, (cvx.lo[2] + cvx.hi[2]) * 0.5f };
+			const auto& pl = cvx.planes[plane];
+			const float n[3] = { pl[0], pl[1], pl[2] };
+			const float nl = std::sqrt(dot(n, n));
+			if (nl < 1e-6f) {
+				return false;
+			}
+			const float dist = (dot(n, mid) + pl[3]) / (nl * nl);
+			const float o[3] = { mid[0] - n[0] * dist, mid[1] - n[1] * dist, mid[2] - n[2] * dist };
+			const float ref[3] = { std::fabs(n[1]) < 0.9f * nl ? 0.0f : 1.0f, std::fabs(n[1]) < 0.9f * nl ? 1.0f : 0.0f, 0.0f };
+			float       t1[3], t2[3];
+			cross(ref, n, t1);
+			const float lt = std::sqrt(dot(t1, t1));
+			for (float& k : t1) {
+				k /= lt;
+			}
+			cross(n, t1, t2);
+			const float l2 = std::sqrt(dot(t2, t2));
+			for (float& k : t2) {
+				k /= l2;
+			}
+			const float sgn1[4] = { -1, 1, 1, -1 }, sgn2[4] = { -1, -1, 1, 1 };
+			for (int q = 0; q < 4; ++q) {
+				const float s1 = sgn1[q] * diag, s2 = sgn2[q] * diag;
+				poly.push_back({ o[0] + t1[0] * s1 + t2[0] * s2, o[1] + t1[1] * s1 + t2[1] * s2, o[2] + t1[2] * s1 + t2[2] * s2 });
+			}
+			for (std::size_t j = 0; j < cvx.planes.size() && poly.size() >= 3; ++j) {
+				if (j == plane) {
+					continue;
+				}
+				const auto& cp = cvx.planes[j];
+				clipped.clear();
+				for (std::size_t v = 0; v < poly.size(); ++v) {
+					const auto& a = poly[v];
+					const auto& b = poly[(v + 1) % poly.size()];
+					const float da = cp[0] * a[0] + cp[1] * a[1] + cp[2] * a[2] + cp[3];
+					const float db = cp[0] * b[0] + cp[1] * b[1] + cp[2] * b[2] + cp[3];
+					if (da <= 0.0f) {
+						clipped.push_back(a);
+					}
+					if ((da <= 0.0f) != (db <= 0.0f)) {
+						const float t = da / (da - db);
+						clipped.push_back({ a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t });
+					}
+				}
+				poly.swap(clipped);
+			}
+			if (poly.size() < 3) {
+				poly.clear();
+				return false;
+			}
+			return true;
+		}
 	}
 
 	/// a half-life brush as a minecraft convex. its bounds are the source box it was gathered in, cut down by its
@@ -120,6 +193,7 @@ namespace halfcraft
 		const float offset = static_cast<float>(slot.x_blocks());
 		float       bmins[3] = { mins[0], mins[1], mins[2] }, bmaxs[3] = { maxs[0], maxs[1], maxs[2] };
 		out.planes.clear();
+		out.plane_flags.clear();
 		for (std::size_t p = 0; p < count; ++p) {
 			const auto& pl = planes[p];
 			// source: inside where n.p <= dist. minecraft: n' = (nx, nz, -ny), inside where
@@ -145,8 +219,30 @@ namespace halfcraft
 		out.flags = 0;
 	}
 
+	/// the flags of a convex's face on a plane: the convex's own and the plane's (core/hc_dig_material.h's dig_flags: a
+	/// face cut out of a hole's wall has a material of its own). a plane with a material replaces the convex's, whose
+	/// bits 8-15 would otherwise mix into a third one (stone | planks is dirt); a plane without one (sky, diggable alone)
+	/// adds its bits to the convex's.
+	inline std::uint32_t face_flags(const ColPrimitives::Convex& cvx, std::size_t plane)
+	{
+		if (plane >= cvx.plane_flags.size()) {
+			return cvx.flags;
+		}
+		const std::uint32_t own = cvx.plane_flags[plane];
+		return ((own & PRIM_MATERIAL_MASK) != 0 ? cvx.flags & ~PRIM_MATERIAL_MASK : cvx.flags) | own;
+	}
+
+	/// the face a convex's plane makes, as the corners of a polygon wound counter-clockwise seen from outside.
+	/// @param poly - replaced by the corners (empty when false)
+	/// @return false when the plane has no face (see voxel_detail::face_polygon)
+	inline bool convex_face(const ColPrimitives::Convex& cvx, std::size_t plane, std::vector<std::array<float, 3>>& poly)
+	{
+		std::vector<std::array<float, 3>> scratch;
+		return voxel_detail::face_polygon(cvx, plane, poly, scratch);
+	}
+
 	/// convex hulls (planes) -> outward-wound triangles: clip a big square on each plane by all the
-	/// others. appended to out after the source's own triangles.
+	/// others. appended to out after the source's own triangles, each face's with its face_flags.
 	inline void triangulate(const ColPrimitives& src, std::vector<ColPrimitives::Tri>& out)
 	{
 		using namespace voxel_detail;
@@ -156,59 +252,15 @@ namespace halfcraft
 		}
 		std::vector<std::array<float, 3>> poly, clipped;
 		for (const auto& cvx : src.convexes) {
-			const float ex = cvx.hi[0] - cvx.lo[0], ey = cvx.hi[1] - cvx.lo[1], ez = cvx.hi[2] - cvx.lo[2];
-			const float diag = std::sqrt(ex * ex + ey * ey + ez * ez) + 1.0f;
-			const float mid[3] = { (cvx.lo[0] + cvx.hi[0]) * 0.5f, (cvx.lo[1] + cvx.hi[1]) * 0.5f, (cvx.lo[2] + cvx.hi[2]) * 0.5f };
 			for (std::size_t i = 0; i < cvx.planes.size(); ++i) {
-				const auto& pl = cvx.planes[i];
-				const float n[3] = { pl[0], pl[1], pl[2] };
-				const float nl = std::sqrt(dot(n, n));
-				if (nl < 1e-6f) {
+				if (!face_polygon(cvx, i, poly, clipped)) {
 					continue;
 				}
-				const float dist = (dot(n, mid) + pl[3]) / (nl * nl);
-				const float o[3] = { mid[0] - n[0] * dist, mid[1] - n[1] * dist, mid[2] - n[2] * dist };
-				const float ref[3] = { std::fabs(n[1]) < 0.9f * nl ? 0.0f : 1.0f, std::fabs(n[1]) < 0.9f * nl ? 1.0f : 0.0f, 0.0f };
-				float       t1[3], t2[3];
-				cross(ref, n, t1);
-				const float lt = std::sqrt(dot(t1, t1));
-				for (float& k : t1) {
-					k /= lt;
-				}
-				cross(n, t1, t2);
-				const float l2 = std::sqrt(dot(t2, t2));
-				for (float& k : t2) {
-					k /= l2;
-				}
-				poly.clear();
-				const float sgn1[4] = { -1, 1, 1, -1 }, sgn2[4] = { -1, -1, 1, 1 };
-				for (int q = 0; q < 4; ++q) {
-					const float s1 = sgn1[q] * diag, s2 = sgn2[q] * diag;
-					poly.push_back({ o[0] + t1[0] * s1 + t2[0] * s2, o[1] + t1[1] * s1 + t2[1] * s2, o[2] + t1[2] * s1 + t2[2] * s2 });
-				}
-				for (std::size_t j = 0; j < cvx.planes.size() && poly.size() >= 3; ++j) {
-					if (j == i) {
-						continue;
-					}
-					const auto& cp = cvx.planes[j];
-					clipped.clear();
-					for (std::size_t v = 0; v < poly.size(); ++v) {
-						const auto& a = poly[v];
-						const auto& b = poly[(v + 1) % poly.size()];
-						const float da = cp[0] * a[0] + cp[1] * a[1] + cp[2] * a[2] + cp[3];
-						const float db = cp[0] * b[0] + cp[1] * b[1] + cp[2] * b[2] + cp[3];
-						if (da <= 0.0f) {
-							clipped.push_back(a);
-						}
-						if ((da <= 0.0f) != (db <= 0.0f)) {
-							const float t = da / (da - db);
-							clipped.push_back({ a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t });
-						}
-					}
-					poly.swap(clipped);
-				}
+				const auto&         pl = cvx.planes[i];
+				const float         n[3] = { pl[0], pl[1], pl[2] };
+				const std::uint32_t flags = face_flags(cvx, i);
 				for (std::size_t v = 1; v + 1 < poly.size(); ++v) {
-					ColPrimitives::Tri t{ { poly[0][0], poly[0][1], poly[0][2], poly[v][0], poly[v][1], poly[v][2], poly[v + 1][0], poly[v + 1][1], poly[v + 1][2] }, cvx.flags };
+					ColPrimitives::Tri t{ { poly[0][0], poly[0][1], poly[0][2], poly[v][0], poly[v][1], poly[v][2], poly[v + 1][0], poly[v + 1][1], poly[v + 1][2] }, flags };
 					float              e1[3], e2[3], tn[3];
 					sub(t.v + 3, t.v, e1);
 					sub(t.v + 6, t.v, e2);

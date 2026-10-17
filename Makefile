@@ -16,6 +16,7 @@
 #   make format                    clang-format the c++, ruff the python, eclipse's formatter the java; make lint: check
 #                                  (and that the protocol files are what the schema gives)
 #   make tidy                      clang-tidy over halfcraft's c++, both engines (after make build)
+#   make core-test                 the c++ core's own tests (tools\debug\core_tests.cpp): no sdk, no game
 #
 # ENGINE: hl2 (half-life 2's own 32-bit engine), hl2dm (half-life 2: deathmatch's 64-bit one) or all
 # (default; `make run` takes hl2dm then). NOPROJECTS=1 skips vpc when no .vpc file changed.
@@ -24,7 +25,7 @@
 SHELL := powershell.exe
 .SHELLFLAGS := -NoProfile -Command
 .DEFAULT_GOAL := help
-.PHONY: help setup build mc mc-run mc-test run cmd test-start test-stop patches proto package format lint tidy clean
+.PHONY: help setup build mc mc-run mc-test run cmd test-start test-stop patches proto package format lint tidy core-test clean
 
 ENGINE ?= all
 RUN_ENGINE := $(if $(filter all,$(ENGINE)),hl2dm,$(ENGINE))
@@ -33,7 +34,7 @@ ARGS ?=
 C ?=
 
 help:
-	@Get-Content Makefile | Select-Object -First 22 | ForEach-Object { $$_ -replace '^# ?', '' }
+	@Get-Content Makefile | Select-Object -First 23 | ForEach-Object { $$_ -replace '^# ?', '' }
 
 setup:
 	python tools/build/setup_sdk.py --engine $(ENGINE)
@@ -82,6 +83,9 @@ lint:
 
 tidy:
 	python tools/lint/tidy.py
+
+core-test:
+	python tools/debug/core_tests.py
 
 # build output that's safe to throw away: not build\game-* (saves and settings live there)
 clean:
