@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "client/hc_blocks.h"
+#include "client/hc_dig.h"
 #include "client/hc_light.h"
 #include "client/hc_mesh.h"
 #include "client/hc_texture.h"
@@ -435,6 +436,9 @@ namespace halfcraft
 	{
 		if (CurrentViewID() != VIEW_MAIN) {
 			return;  // reflections and monitors keep to what the leaf system gives them
+		}
+		if (!dig_holes_near()) {
+			return;  // no hole near the player: the rock behind the map's walls is shut, nothing dug in it to see
 		}
 		const Vector& eye = CurrentViewOrigin();
 		for (auto& entry : blocks().sections) {

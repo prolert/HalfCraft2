@@ -29,12 +29,17 @@ namespace halfcraft
 	bool dig_enabled();
 
 	/// once per frame. with the shader dll, the dig mask takes the sections that changed (laid out afresh around the
-	/// player when it's new or the player went too far from its centre). while the map being played has holes and the
-	/// shader dll cuts them out of its walls (whatever hc_dig says), r_novis 1 and r_portalsopenall 1: the rooms behind
-	/// the holes are drawn whatever the map's vis says. their old values come back on a map without holes, and off the map.
+	/// player when it's new or the player went too far from its centre). while a cell is dug in the mask (the holes the
+	/// shader dll cuts out of the walls of the map being played, whatever hc_dig says), r_novis 1 and r_portalsopenall 1:
+	/// the rooms behind the holes are drawn whatever the map's vis says. their old values come back once no hole is in
+	/// the mask (holes further away are drawn closed), and off the map.
 	/// @param player - the player's feet, minecraft coords
 	/// @param in_game - a map is being played (HalfCraftClientSystem::update's)
 	void dig_update(const McVec& player, bool in_game);
+
+	/// whether dig_update found a hole in the dig mask (r_novis is 1 for it): what's dug in the rock behind the map's
+	/// walls can be seen then (hc_blocks.cpp draws its sections, client_draw_unplaced_blocks).
+	bool dig_holes_near();
 
 	/// gives r_novis and r_portalsopenall their old values back, frees the dig mask and drops every section (client
 	/// shutdown).

@@ -47,6 +47,8 @@ namespace halfcraft
 		int  g_old_novis = 0;
 		int  g_old_portals = 0;
 
+		bool g_holes_near = false;  // dig_holes_near's, as dig_update last found it
+
 		using SectionKey = std::tuple<int, int, int>;  // a section, minecraft section coords
 
 		struct DigStore
@@ -147,12 +149,16 @@ namespace halfcraft
 			return ((it->second.first.bits[bit >> 3] >> (bit & 7)) & 1) != 0;
 		}
 
-		/// whether a cell is dug in the current map (dig_set_slot has emptied the sections of other maps' slots)
-		bool any_dug()
+		/// whether a cell is dug in a section the dig mask's layout has (the ones it cuts out; dig_set_slot has emptied
+		/// the sections of other maps' slots)
+		bool any_dug_in(const DigMaskLayout& layout)
 		{
 			auto&                       d = store();
 			std::lock_guard<std::mutex> lock(d.lock);
-			return std::any_of(d.sections.begin(), d.sections.end(), [](const auto& entry) { return entry.second.first.count > 0; });
+			return std::any_of(d.sections.begin(), d.sections.end(), [&layout](const auto& entry) {
+				const DugSection& section = entry.second.first;
+				return section.count > 0 && layout.has_section(section.sx, section.sy, section.sz);
+			});
 		}
 
 		/// sets a cvar to value unless it has it already (a missing one is left alone)
@@ -163,10 +169,10 @@ namespace halfcraft
 			}
 		}
 
-		/// want: r_novis 1 and r_portalsopenall 1, so the rooms behind the holes are drawn (the map's vis hides them
-		/// behind its walls); otherwise their values from before come back. both are cheats: ConVar::SetValue doesn't
-		/// check FCVAR_CHEAT (the flag stays on them), but the engine puts cheats back to their defaults when sv_cheats
-		/// changes, so they're set again every frame.
+		/// want: r_novis 1 and r_portalsopenall 1, so the rooms behind the holes near the player are drawn (the map's
+		/// vis hides them behind its walls); otherwise their values from before come back. both are cheats:
+		/// ConVar::SetValue doesn't check FCVAR_CHEAT (the flag stays on them), but the engine puts cheats back to their
+		/// defaults when sv_cheats changes, so they're set again every frame.
 		void force_vis(bool want)
 		{
 			if (!want && !g_vis_forced) {
@@ -355,13 +361,21 @@ namespace halfcraft
 	void dig_update(const McVec& player, bool in_game)
 	{
 		mask_update(player);
-		// hc_dig 0 leaves the holes cut out (it only stops new ones): they're seen through all the same
-		force_vis(in_game && dig_shader_ready() && any_dug());
+		// hc_dig 0 leaves the holes cut out (it only stops new ones): they're seen through all the same. the ones
+		// outside the mask are drawn closed: nothing to see through there
+		g_holes_near = in_game && dig_shader_ready() && any_dug_in(mask().layout);
+		force_vis(g_holes_near);
+	}
+
+	bool dig_holes_near()
+	{
+		return g_holes_near;
 	}
 
 	void dig_shutdown()
 	{
 		force_vis(false);
+		g_holes_near = false;
 		auto& m = mask();
 		m.texture.release();
 		m.state = {};

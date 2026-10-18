@@ -77,6 +77,18 @@ namespace halfcraft
 			return true;
 		}
 
+		/// whether a section is in the layout. its edges lie on section borders (around()), so a section is in it whole or
+		/// not at all.
+		/// @param sx, sy, sz - the section (minecraft section coords: its blocks start at 16 times them)
+		bool has_section(int sx, int sy, int sz) const
+		{
+			using dig_mask_detail::SECTION_BLOCKS;
+			const int x0 = sx * SECTION_BLOCKS, y0 = sy * SECTION_BLOCKS, z0 = sz * SECTION_BLOCKS;
+			const int last = SECTION_BLOCKS - 1;
+			int       u = 0, v = 0;
+			return texel(x0, y0, z0, u, v) && texel(x0 + last, y0 + last, z0 + last, u, v);
+		}
+
 		/// what the pixel shader (c20 and c21) needs to find the cell of a source point p, in a map's slot:
 		/// the cell is (floor((p.x - X0) / 40), floor((Y1 - p.y) / 40), floor((p.z - Z0) / 40)), its texel texel()'s of it.
 		/// @param origin - c20: {X0 = (ox - x_blocks) * 40, Y1 = -oz * 40, Z0 = oy * 40 + grid_z, 1 / 40}
@@ -126,12 +138,11 @@ namespace halfcraft
 	{
 		using dig_mask_detail::SECTION_BLOCKS;
 		using dig_mask_detail::TEXEL_BYTES;
-		const int x0 = sx * SECTION_BLOCKS, y0 = sy * SECTION_BLOCKS, z0 = sz * SECTION_BLOCKS;
-		const int last = SECTION_BLOCKS - 1;
-		int       u = 0, v = 0;
-		if (!layout.texel(x0, y0, z0, u, v) || !layout.texel(x0 + last, y0 + last, z0 + last, u, v)) {
+		if (!layout.has_section(sx, sy, sz)) {
 			return false;
 		}
+		const int x0 = sx * SECTION_BLOCKS, y0 = sy * SECTION_BLOCKS, z0 = sz * SECTION_BLOCKS;
+		int       u = 0, v = 0;
 		for (int y = 0; y < SECTION_BLOCKS; ++y) {
 			layout.texel(x0, y0 + y, z0, u, v);  // the layer's corner
 			for (int z = 0; z < SECTION_BLOCKS; ++z) {

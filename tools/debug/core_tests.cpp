@@ -820,6 +820,31 @@ namespace
 		CHECK(std::all_of(rgba.begin(), rgba.end(), [](std::uint8_t byte) { return byte == 0; }));
 	}
 
+	void test_dig_mask_has_section()
+	{
+		// blocks (3136, 32, -112) to (3263, 95, 15): sections 196-203 along x, 2-5 along y, -7-0 along z
+		const DigMaskLayout layout = DigMaskLayout::around(3200.5, 70.2, -40.7);
+		CHECK(layout.has_section(196, 2, -7) && layout.has_section(203, 5, 0) && layout.has_section(200, 4, -3));
+		CHECK(!layout.has_section(195, 2, -7) && !layout.has_section(204, 2, -7));
+		CHECK(!layout.has_section(196, 1, -7) && !layout.has_section(196, 6, -7));
+		CHECK(!layout.has_section(196, 2, -8) && !layout.has_section(196, 2, 1));
+
+		// the sections in and around the layout: write_section writes the ones it has, and only those
+		std::vector<std::uint8_t> rgba(1024 * 1024 * 4, 0);
+		int                       wrong = 0, inside = 0;
+		for (int sx = 194; sx <= 205; ++sx) {
+			for (int sy = 0; sy <= 7; ++sy) {
+				for (int sz = -9; sz <= 2; ++sz) {
+					const bool has = layout.has_section(sx, sy, sz);
+					wrong += write_section(layout, sx, sy, sz, nullptr, rgba.data()) != has ? 1 : 0;
+					inside += has ? 1 : 0;
+				}
+			}
+		}
+		CHECK(wrong == 0);
+		CHECK(inside == 8 * 4 * 8);
+	}
+
 	void test_dug_cells()
 	{
 		// section (-1, 0, 2) (blocks from -16, 0, 32): bit 0 is block (0, 0, 0) of it, bit 561 (byte 70, bit 1) block (1, 2, 3)
@@ -941,6 +966,7 @@ int run_tests()
 	test_dig_mask_layout_places_the_cells_in_the_texture();
 	test_dig_mask_shader_texel();
 	test_dig_mask_write_section();
+	test_dig_mask_has_section();
 	test_dug_cells();
 	test_triangle_clip();
 	if (failed == 0) {
