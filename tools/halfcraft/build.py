@@ -29,8 +29,9 @@ PROJECT = re.compile(r" \[[^\]]+\]$")
 # ShaderCompile2's summary of a compile, warnings/errors (each distinct message counted once, then how often it came).
 # it prints nothing at all for a shader it skips, the crc of whose source and includes its .vcs was compiled from: run
 # on build\shaders with every shader up to date, it exits 0 with no output on stdout or stderr, so no line there is no
-# failure. a compile with an hlsl error exits 1 and removes the failed .vcs itself (WARNINGS/ERRORS 23/1)
-SHADER_SUMMARY = re.compile(r"WARNINGS/ERRORS (\d+)/(\d+)")
+# failure. a compile with an hlsl error exits 1 and removes the failed .vcs itself (WARNINGS/ERRORS 23/1). looked for
+# anywhere in a line: other text may share it
+SHADER_SUMMARY = re.compile(r"\bWARNINGS/ERRORS (\d+)/(\d+)\b")
 SHADER_ERROR = re.compile(r"\berror\b", re.IGNORECASE)
 
 
@@ -38,7 +39,7 @@ def shader_errors(output: str) -> int | None:
     """the errors ShaderCompile2's output counts on its WARNINGS/ERRORS line, or None without one (a skipped shader).
     its progress lines end in a bare \\r, so lines split at either.
     """
-    counts = [SHADER_SUMMARY.fullmatch(line.strip()) for line in re.split(r"[\r\n]", output)]
+    counts = [SHADER_SUMMARY.search(line) for line in re.split(r"[\r\n]", output)]
     found = [int(match.group(2)) for match in counts if match]
     return sum(found) if found else None
 
