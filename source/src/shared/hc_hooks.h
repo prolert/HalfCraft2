@@ -101,6 +101,13 @@ namespace halfcraft
 	/// overlay); only source's menus and console still go over it.
 	void client_post_render_vgui();
 
+	/// CBaseWorldView::DrawExecute, after the opaque renderables (translucent false) and after the
+	/// translucent ones (true): in the player's view, draws minecraft's sections near the camera that the
+	/// leaf system didn't (hc_blocks.cpp). source lists no leaf outside the map, so a section there is
+	/// drawn only while one of its leaves inside the map is in view: a tunnel dug into the rock behind
+	/// the map's walls showed nothing when looked along.
+	void client_draw_unplaced_blocks(bool translucent);
+
 	/// CGameMovement::HalfCraftMove, in prediction, and server.dll's (HC_JUMP_LANDED_EXPORT): source
 	/// took one of minecraft's jumps next to where minecraft put its player, which didn't fit (a pearl
 	/// against a ceiling, a ledge or a wall), or refused it. minecraft's player goes there too (hc_jumps.cpp).

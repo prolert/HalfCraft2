@@ -7,6 +7,8 @@
 #include "materialsystem/imaterial.h"
 #include "materialsystem/imaterialsystem.h"
 #include "materialsystem/imesh.h"
+#include "view.h"
+#include "viewrender.h"
 
 #include "tier0/valve_minmax_off.h"
 #include <algorithm>
@@ -27,6 +29,7 @@
 #include "core/hc_log.h"
 #include "core/hc_units.h"
 #include "shared/hc_bridge.h"
+#include "shared/hc_hooks.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -40,6 +43,10 @@ namespace halfcraft
 		constexpr int   BUILDS_PER_FRAME = 8;
 		constexpr auto  BUILD_BUDGET = std::chrono::microseconds(4000);
 		constexpr float LIGHT_PROBE_BLOCKS = 0.3f;  // light is sampled this far out in front of a face
+		// how far from the camera, across, the leaf system's misses are drawn anyway: minecraft streams the
+		// sections within its render distance (8 chunks while linked, HostClient) and one chunk more
+		// (WorldExporter) around the player's chunk, and the camera can be anywhere in that chunk
+		constexpr float UNPLACED_NEAR_UNITS = static_cast<float>((8 + 1 + 1) * SECTION_BLOCKS * UNITS_PER_BLOCK);
 
 		// ---- one section ----------------------------------------------------------------------
 		class Section final : public CDefaultClientRenderable
@@ -63,6 +70,9 @@ namespace halfcraft
 			void build(const McTexture& atlas, IMaterial* cutout, IMaterial* translucent, MapSlot slot, float light_scale);
 			/// drops meshes and the leaf system registration (vertices are kept).
 			void unload();
+			/// in the player's view, after the leaf system's pass (opaque or translucent): draws this
+			/// section if that pass didn't and it's near the camera and in the view (client_draw_unplaced_blocks).
+			void draw_unplaced(bool translucent, const Vector& eye);
 
 			// IClientRenderable
 			const Vector&      GetRenderOrigin() override { return origin_; }
@@ -88,6 +98,7 @@ namespace halfcraft
 			Vector                        origin_{ 0.0f, 0.0f, 0.0f };
 			Vector                        mins_{ 0.0f, 0.0f, 0.0f }, maxs_{ 0.0f, 0.0f, 0.0f };
 			matrix3x4_t                   transform_;
+			int                           drawn_frame_[2] = { -1, -1 };  // the frame its opaque / translucent meshes went into the player's view
 		};
 
 		void Section::build(const McTexture& atlas, IMaterial* cutout, IMaterial* translucent, MapSlot slot, float light_scale)
@@ -179,6 +190,9 @@ namespace halfcraft
 			if (meshes.empty()) {
 				return 0;
 			}
+			if (CurrentViewID() == VIEW_MAIN) {
+				drawn_frame_[translucent_pass ? 1 : 0] = gpGlobals->framecount;
+			}
 			CMatRenderContextPtr context(materials);
 			context->MatrixMode(MATERIAL_MODEL);
 			context->PushMatrix();
@@ -190,6 +204,26 @@ namespace halfcraft
 			context->MatrixMode(MATERIAL_MODEL);
 			context->PopMatrix();
 			return 1;
+		}
+
+		void Section::draw_unplaced(bool translucent, const Vector& eye)
+		{
+			const auto& meshes = translucent ? translucent_ : opaque_;
+			if (meshes.empty() || drawn_frame_[translucent ? 1 : 0] == gpGlobals->framecount) {
+				return;
+			}
+			const Vector lo = origin_ + mins_, hi = origin_ + maxs_;
+			const float  across_x = std::max({ lo.x - eye.x, eye.x - hi.x, 0.0f });
+			const float  across_y = std::max({ lo.y - eye.y, eye.y - hi.y, 0.0f });
+			if (across_x * across_x + across_y * across_y > UNPLACED_NEAR_UNITS * UNPLACED_NEAR_UNITS || engine->CullBox(lo, hi)) {
+				return;
+			}
+			// the state DrawOpaqueRenderable / DrawTranslucentRenderable set for a renderable
+			float color[3];
+			GetColorModulation(color);
+			render->SetColorModulation(color);
+			render->SetBlend(static_cast<float>(GetFxBlend()) / 255.0f);
+			DrawModel(STUDIO_RENDER | (translucent ? STUDIO_TRANSPARENCY : 0) | (IsTwoPass() ? STUDIO_TWOPASS : 0));
 		}
 
 		// ---- all of it ------------------------------------------------------------------------
@@ -394,6 +428,17 @@ namespace halfcraft
 			if (++built >= BUILDS_PER_FRAME || std::chrono::steady_clock::now() - start > BUILD_BUDGET) {
 				break;
 			}
+		}
+	}
+
+	void client_draw_unplaced_blocks(bool translucent)
+	{
+		if (CurrentViewID() != VIEW_MAIN) {
+			return;  // reflections and monitors keep to what the leaf system gives them
+		}
+		const Vector& eye = CurrentViewOrigin();
+		for (auto& entry : blocks().sections) {
+			entry.second->draw_unplaced(translucent, eye);
 		}
 	}
 

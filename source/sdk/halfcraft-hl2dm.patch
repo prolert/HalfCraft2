@@ -247,7 +247,7 @@ index de0c0b07..bae40167 100644
  	{
  		// Let the headtracking read the status of the HMD, etc.
 diff --git a/src/game/client/viewrender.cpp b/src/game/client/viewrender.cpp
-index b4011e28..cbc45f2c 100644
+index b4011e28..1ff3f756 100644
 --- a/src/game/client/viewrender.cpp
 +++ b/src/game/client/viewrender.cpp
 @@ -80,6 +80,8 @@
@@ -314,6 +314,23 @@ index b4011e28..cbc45f2c 100644
  
  	m_DrawFlags = 0;
  
+@@ -5525,6 +5538,8 @@ void CBaseWorldView::DrawExecute( float waterHeight, view_id_t viewID, float wat
+ 	{
+ 		DrawWorld( waterZAdjust );
+ 		DrawOpaqueRenderables( DepthMode );
++		// halfcraft: minecraft's sections the leaf system didn't place (in the rock behind the map's walls)
++		halfcraft::client_draw_unplaced_blocks( false );
+ 
+ #ifdef TF_CLIENT_DLL
+ 		bool bVisionOverride = ( localplayer_visionflags.GetInt() & ( 0x01 ) ); // Pyro-vision Goggles
+@@ -5535,6 +5550,7 @@ void CBaseWorldView::DrawExecute( float waterHeight, view_id_t viewID, float wat
+ 		}
+ #endif
+ 		DrawTranslucentRenderables( false, false );
++		halfcraft::client_draw_unplaced_blocks( true );
+ 		DrawNoZBufferTranslucentRenderables();
+ 	}
+ 	else
 diff --git a/src/game/server/EnvMessage.cpp b/src/game/server/EnvMessage.cpp
 index a22dfc11..e8c2e539 100644
 --- a/src/game/server/EnvMessage.cpp
