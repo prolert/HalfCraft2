@@ -40,15 +40,16 @@ public final class HostDig {
 
 	// how far from the player's eyes the middle of a cell they open may be
 	private static final double REACH = 8.0;
-	// how many ticks a reveal waits at most for Half-Life to send the regions around its cell
-	private static final int REVEAL_TRIES = 60;
 	// server thread only
 	private static final HostLink.HostState HOST = new HostLink.HostState();
 	// the reveals still to do; server thread only
 	private static final List<Pending> PENDING = new ArrayList<>();
 
-	/** A dug cell whose neighbours are to be revealed, opened as {@code material}; {@code tries} ticks left to wait. */
-	private record Pending(ServerLevel level, BlockPos pos, int material, int tries) {
+	/** A dug cell whose neighbours are to be revealed, opened as {@code material}; {@code age}: see {@link RevealRetry}. */
+	private record Pending(ServerLevel level, BlockPos pos, int material, int age) {
+		Pending older() {
+			return new Pending(this.level, this.pos, this.material, RevealRetry.older(this.age));
+		}
 	}
 
 	private HostDig() {
@@ -114,7 +115,7 @@ public final class HostDig {
 			}
 		}
 		level.levelEvent(LevelEvent.PARTICLES_AND_SOUND_DESTROY_BLOCK, pos, Block.getId(state));
-		PENDING.add(new Pending(level, pos.immutable(), material, REVEAL_TRIES));
+		PENDING.add(new Pending(level, pos.immutable(), material, 0));
 		HalfCraft.LOG.info("HalfCraft: dug {} out of Half-Life's walls as {}", pos.toShortString(), DigMaterials.blockId(material));
 	}
 
@@ -142,7 +143,7 @@ public final class HostDig {
 			return;
 		}
 		if (column(chunk).has(pos.getX(), pos.getY(), pos.getZ()) && !digOff()) {
-			PENDING.add(new Pending(level, pos.immutable(), materialOf(previous), REVEAL_TRIES));
+			PENDING.add(new Pending(level, pos.immutable(), materialOf(previous), 0));
 		}
 	}
 
@@ -150,14 +151,22 @@ public final class HostDig {
 		if (PENDING.isEmpty()) {
 			return;
 		}
-		// what revealing queues (a block it puts changes others) waits for the next tick
+		// what revealing queues (a block it puts changes others) waits for the next tick. One queued before
+		// Half-Life let nothing more be dug still runs: its cell was dug while it could be
 		List<Pending> due = new ArrayList<>(PENDING);
 		PENDING.clear();
 		for (Pending p : due) {
-			if (!sidesKnown(p.pos()) && p.tries() > 1) {
-				PENDING.add(new Pending(p.level(), p.pos(), p.material(), p.tries() - 1));
-			} else {
-				reveal(p.level(), p.pos(), p.material());
+			boolean loaded = p.level().isLoaded(p.pos());
+			switch (RevealRetry.step(p.age(), loaded, loaded && isDug(p.level(), p.pos()), sidesKnown(p.pos()))) {
+				case FAST_TRY, SLOW_WAIT -> PENDING.add(p.older());
+				case REVEAL_KEEP -> {
+					reveal(p.level(), p.pos(), p.material());
+					PENDING.add(p.older());
+				}
+				case REVEAL_DONE -> reveal(p.level(), p.pos(), p.material());
+				case DROP -> {
+					// its chunk went, or it isn't dug: nothing to reveal around
+				}
 			}
 		}
 	}
