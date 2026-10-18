@@ -179,6 +179,7 @@ public final class HostCollision {
 	}
 
 	/** The layers of {@code occupancy} and {@code voids} joined (either may be null: nothing there), in a new array. */
+	// package-private for DigRules
 	static long[] rock(long @Nullable [] occupancy, long @Nullable [] voids) {
 		long[] rock = new long[8];
 		for (int y = 0; y < 8; y++) {
