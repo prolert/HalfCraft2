@@ -54,6 +54,31 @@ class ForgottenBlocksTest {
 	}
 
 	@Test
+	void shouldPruneTheBlocksNoKeptCheckpointCouldPutBack() {
+		long third = 7L;
+		ForgottenBlocks blocks = new ForgottenBlocks();
+		blocks.forget(CELL, 3);
+		blocks.forget(OTHER, 5);
+		blocks.forget(third, 9);
+		blocks.prune(0); // the oldest kept from before checkpoints were numbered: every one may still matter
+		assertEquals(6, blocks.pairs().length);
+		blocks.prune(6); // checkpoints 6 and on are left: 3 and 5 put nothing back over the blocks forgotten then
+		assertEquals(2, blocks.pairs().length);
+		assertFalse(blocks.holds(third, 9));
+		assertTrue(blocks.holds(third, 10));
+		blocks.prune(10);
+		assertTrue(blocks.isEmpty());
+	}
+
+	@Test
+	void shouldKeepABlockForgottenAtTheOldestKeptCheckpoint() {
+		ForgottenBlocks blocks = new ForgottenBlocks();
+		blocks.forget(CELL, 6); // forgotten after checkpoint 6, which is kept: it still has the block as it was
+		blocks.prune(6);
+		assertFalse(blocks.holds(CELL, 6));
+	}
+
+	@Test
 	void shouldComeBackTheSameFromItsPairs() {
 		ForgottenBlocks blocks = new ForgottenBlocks();
 		blocks.forget(CELL, 3);

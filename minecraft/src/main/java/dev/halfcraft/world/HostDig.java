@@ -225,6 +225,7 @@ public final class HostDig {
 			HalfCraft.LOG.info("HalfCraft: {} cells around {} revealed: {}{}", reveals.size(), pos.toShortString(),
 				reveals.stream().map(r -> r.x() + ", " + r.y() + ", " + r.z()).collect(Collectors.joining("; ")),
 				voidOnly ? " (void only: Half-Life lets nothing more be dug)" : "");
+			Rollback.writeForgotten(level.getServer());
 		}
 	}
 

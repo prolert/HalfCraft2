@@ -23,6 +23,18 @@ final class ForgottenBlocks {
 		return !this.forgotten.containsKey(key) || checkpoint > this.forgotten.get(key);
 	}
 
+	boolean isEmpty() {
+		return this.forgotten.isEmpty();
+	}
+
+	/**
+	 * Drops the blocks no checkpoint numbered {@code oldestKept} or later has from before they were
+	 * forgotten: those forgotten before it was written. For when the older checkpoints are gone.
+	 */
+	void prune(long oldestKept) {
+		this.forgotten.long2LongEntrySet().removeIf(entry -> entry.getLongValue() < oldestKept);
+	}
+
 	/**
 	 * What going back to checkpoint number {@code checkpoint} puts at key: what the checkpoint has there
 	 * while that {@link #holds}, else what was there before anything tracked changed it (null: nothing to

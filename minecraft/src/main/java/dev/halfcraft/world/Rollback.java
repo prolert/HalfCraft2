@@ -64,10 +64,9 @@ import org.jspecify.annotations.Nullable;
  * restores it: tracked blocks go back to the checkpoint's state, or to how they were before
  * anything changed them if they changed only after it. Any save, in any order. A block the rollback
  * {@link #forget}s is tracked afresh from its next change, and a checkpoint from before it was
- * forgotten no longer has it (see {@link ForgottenBlocks}). Dropped items,
- * arrows, lit TNT and falling blocks go too; the player gets back inventory, armour, health,
- * hunger, experience and effects (not the position: Half-Life puts the player where the save has
- * them).
+ * forgotten no longer puts back what it has of it (see {@link ForgottenBlocks}). Dropped items, arrows,
+ * lit TNT and falling blocks go too; the player gets back inventory, armour, health, hunger,
+ * experience and effects (not the position: Half-Life puts the player where the save has them).
  *
  * <p>A new game from Half-Life's menu starts a playthrough: each map it enters for the first time
  * (the new game's own, then each one a level transition brings up) goes back to how it was before
@@ -96,7 +95,9 @@ public final class Rollback {
 	private static final Long2ObjectOpenHashMap<Snapshot> LATEST = new Long2ObjectOpenHashMap<>();
 	// the blocks forget(...) dropped, and the number of the last checkpoint written (0: none, or only ones from before they were numbered)
 	private static ForgottenBlocks forgotten = new ForgottenBlocks();
-	private static long checkpoints;
+	private static long lastCheckpoint;
+	// forget(...) dropped a tracked block since the block log was last written
+	private static boolean forgotUnwritten;
 
 	// How often the things a sweep removed as chunks loaded are logged at most.
 	private static final long SWEEP_LOG_MS = 5000;
@@ -118,7 +119,8 @@ public final class Rollback {
 		LATEST.clear();
 		playthrough = null;
 		forgotten = new ForgottenBlocks();
-		checkpoints = 0;
+		lastCheckpoint = 0;
+		forgotUnwritten = false;
 		Path file = dir(opened).resolve("blocks.nbt");
 		if (!Files.exists(file)) {
 			return;
@@ -130,7 +132,7 @@ public final class Rollback {
 			readSnapshots(root.getListOrEmpty("latest"), blocks, LATEST);
 			playthrough = readPlaythrough(root);
 			forgotten = ForgottenBlocks.of(root.getLongArray("forgotten").orElse(new long[0]));
-			checkpoints = root.getLongOr("checkpoints", 0L);
+			lastCheckpoint = root.getLongOr("last_checkpoint", 0L);
 			HalfCraft.LOG.info("HalfCraft: rollback tracks {} blocks; {}", ORIGINALS.size(), describe());
 		} catch (IOException | RuntimeException e) {
 			HalfCraft.LOG.warn("HalfCraft: couldn't read the rollback block log {}", file, e);
@@ -151,7 +153,8 @@ public final class Rollback {
 		LATEST.clear();
 		playthrough = null;
 		forgotten = new ForgottenBlocks();
-		checkpoints = 0;
+		lastCheckpoint = 0;
+		forgotUnwritten = false;
 	}
 
 	/** LevelChunk.setBlockState, before: the first change to a block remembers how it was. */
@@ -196,7 +199,18 @@ public final class Rollback {
 		boolean tracked = ORIGINALS.remove(key) != null;
 		tracked |= LATEST.remove(key) != null;
 		if (tracked) {
-			forgotten.forget(key, checkpoints);
+			forgotten.forget(key, lastCheckpoint);
+			forgotUnwritten = true;
+		}
+	}
+
+	/**
+	 * Writes the block log now if {@link #forget} dropped a tracked block since it was last written: what it
+	 * dropped would be tracked again if the game stopped before the next checkpoint. Server thread only.
+	 */
+	public static void writeForgotten(MinecraftServer server) {
+		if (forgotUnwritten) {
+			writeBlockLog(server);
 		}
 	}
 
@@ -245,7 +259,7 @@ public final class Rollback {
 		}
 		CompoundTag root = new CompoundTag();
 		root.put("blocks", blocks);
-		root.putLong("number", ++checkpoints);
+		root.putLong("number", ++lastCheckpoint);
 		writePlaythrough(root);
 		if (player != null) {
 			root.put("player", savePlayer(player));
@@ -258,8 +272,8 @@ public final class Rollback {
 			HalfCraft.LOG.warn("HalfCraft: couldn't write checkpoint {}", file, e);
 			return;
 		}
-		writeBlockLog(from);
 		prune(file.getParent());
+		writeBlockLog(from);
 		HalfCraft.LOG.info("HalfCraft: checkpoint {} ({} blocks{})", Long.toHexString(id), blocks.size(), player != null ? ", the player" : "");
 	}
 
@@ -514,26 +528,44 @@ public final class Rollback {
 		root.put("originals", writeSnapshots(ORIGINALS));
 		root.put("latest", writeSnapshots(LATEST));
 		root.putLongArray("forgotten", forgotten.pairs());
-		root.putLong("checkpoints", checkpoints);
+		root.putLong("last_checkpoint", lastCheckpoint);
 		writePlaythrough(root);
 		Path file = dir(of).resolve("blocks.nbt");
 		try {
 			Files.createDirectories(file.getParent());
 			NbtIo.writeCompressed(root, file);
+			forgotUnwritten = false;
 		} catch (IOException e) {
 			HalfCraft.LOG.warn("HalfCraft: couldn't write the rollback block log {}", file, e);
 		}
 	}
 
-	/** The oldest checkpoints go once there are too many (saves that old roll nothing back). */
+	/**
+	 * The oldest checkpoints go once there are too many (saves that old roll nothing back), and with them the
+	 * forgotten blocks only they could put back.
+	 */
 	private static void prune(Path checkpoints) {
 		try (Stream<Path> files = Files.list(checkpoints)) {
 			List<Path> all = files.sorted(Comparator.comparingLong(Rollback::modified).reversed()).toList();
-			for (Path old : all.subList(Math.min(all.size(), MAX_CHECKPOINTS), all.size())) {
+			int kept = Math.min(all.size(), MAX_CHECKPOINTS);
+			for (Path old : all.subList(kept, all.size())) {
 				Files.deleteIfExists(old);
+			}
+			if (kept > 0 && !forgotten.isEmpty()) {
+				// numbered as they're written, so the oldest one kept has the lowest number
+				forgotten.prune(number(all.get(kept - 1)));
 			}
 		} catch (IOException e) {
 			HalfCraft.LOG.warn("HalfCraft: couldn't prune old checkpoints", e);
+		}
+	}
+
+	/** The number a checkpoint was written with: 0 for one from before they were numbered, or one that can't be read. */
+	private static long number(Path checkpoint) {
+		try {
+			return NbtIo.readCompressed(checkpoint, NbtAccounter.unlimitedHeap()).getLongOr("number", 0L);
+		} catch (IOException | RuntimeException e) {
+			return 0L;
 		}
 	}
 
