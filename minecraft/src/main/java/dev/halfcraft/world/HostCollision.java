@@ -33,6 +33,14 @@ public final class HostCollision {
 	private static final int FILL_SKY = 1 << 24; // all of it is the map's sky: no roof over what's under it
 	// Per block: its 8 occupancy layers, for the box tests mobs' pathfinding makes between cells (NavGrid).
 	private static final ConcurrentHashMap<Long, long[]> LAYERS = new ConcurrentHashMap<>();
+	// Per region Half-Life has described: how much of each block is void, from its kColVoid.
+	private static final ConcurrentHashMap<Long, RegionVoid> VOIDS = new ConcurrentHashMap<>();
+	// A kColVoid comes before its region's kColRegion and shows once that arrives. Consumer thread only.
+	private static final java.util.HashMap<Long, RegionVoid> PENDING_VOIDS = new java.util.HashMap<>();
+	private static boolean voidLogged; // the first void region of this collision epoch is logged. Consumer thread only.
+	private static final int VOID_BLOCKS = REGION_SIZE * REGION_SIZE * REGION_SIZE;
+	private static final long VOID_LAYERS_BYTES = 8 * 8L; // a partly void block's 8 occupancy layers
+	private static final long[] ALL_VOID = { -1L, -1L, -1L, -1L, -1L, -1L, -1L, -1L };
 	private static final ConcurrentHashMap<Long, HostTri[]> TRIS = new ConcurrentHashMap<>();
 	private static volatile java.util.function.Predicate<net.minecraft.world.entity.Entity> smoothCollider = e -> false;
 	private static final Set<Long> KNOWN_REGIONS = ConcurrentHashMap.newKeySet();
@@ -145,6 +153,52 @@ public final class HostCollision {
 	/** This cell's 8 occupancy layers (bit z * 8 + x of layer y), or null without geometry. Never change them. */
 	public static long @Nullable [] layersAt(int x, int y, int z) {
 		return LAYERS.isEmpty() ? null : LAYERS.get(BlockPos.asLong(x, y, z));
+	}
+
+	/**
+	 * This cell's void, as 8 occupancy layers (bit z * 8 + x of layer y): what lies in a solid leaf of
+	 * Half-Life's map and in none of its brushes, beyond the map. Null without void, or while its region
+	 * is unknown. Never change them. A dug cell inside a world brush reads as void once its region comes
+	 * again (Half-Life finds void after the cut): callers skip dug cells.
+	 */
+	public static long @Nullable [] voidLayersAt(int x, int y, int z) {
+		if (VOIDS.isEmpty()) {
+			return null;
+		}
+		RegionVoid region = VOIDS.get(regionKey(Math.floorDiv(x, REGION_SIZE), Math.floorDiv(y, REGION_SIZE), Math.floorDiv(z, REGION_SIZE)));
+		return region == null ? null : region.at(Math.floorMod(x, REGION_SIZE), Math.floorMod(y, REGION_SIZE), Math.floorMod(z, REGION_SIZE));
+	}
+
+	/**
+	 * What is rock in this cell for a tunnel: its geometry joined with its void (a fresh array), or null
+	 * while Half-Life hasn't sent its region. A dug cell inside a world brush reads as void once its region
+	 * comes again (Half-Life finds void after the cut): callers skip dug cells.
+	 */
+	public static long @Nullable [] rockLayersAt(int x, int y, int z) {
+		return isKnown(x, y, z) ? rock(layersAt(x, y, z), voidLayersAt(x, y, z)) : null;
+	}
+
+	/** The layers of {@code occupancy} and {@code voids} joined (either may be null: nothing there), in a new array. */
+	static long[] rock(long @Nullable [] occupancy, long @Nullable [] voids) {
+		long[] rock = new long[8];
+		for (int y = 0; y < 8; y++) {
+			rock[y] = (occupancy == null ? 0L : occupancy[y]) | (voids == null ? 0L : voids[y]);
+		}
+		return rock;
+	}
+
+	/** How much of each block of a region is void; the layers are of the blocks that are partly void. */
+	// package-private for HostCollisionTest
+	record RegionVoid(byte[] kinds, long[][] layers) {
+		/** The void layers of block (bx, by, bz) of the region (each 0-7), or null for none. */
+		long @Nullable [] at(int bx, int by, int bz) {
+			int i = bx + REGION_SIZE * bz + REGION_SIZE * REGION_SIZE * by;
+			return switch (this.kinds[i]) {
+				case VOID_ALL -> ALL_VOID;
+				case VOID_SOME -> this.layers[i];
+				default -> null;
+			};
+		}
 	}
 
 	/** True if any Half-Life geometry is in this cell. */
@@ -285,6 +339,7 @@ public final class HostCollision {
 				case COL_CLEAR -> clear(s.get(JAVA_INT, payload));
 				case COL_REGION -> readRegion(s, payload);
 				case COL_TRIS -> readTris(s, payload);
+				case COL_VOID -> readVoid(s, payload);
 				default -> HalfCraft.LOG.warn("HalfCraft: unknown collision message {}", type);
 			}
 			tail += align8(COL_MSG_HEADER_BYTES + payloadBytes);
@@ -319,10 +374,14 @@ public final class HostCollision {
 		}
 	}
 
-	private static void clear(int newEpoch) {
+	// package-private for HostCollisionTest
+	static void clear(int newEpoch) {
 		// forgotten before the shapes go: whatever holds still until its region is known (the player,
 		// mobs) never sees a known region without its ground
 		KNOWN_REGIONS.clear();
+		VOIDS.clear();
+		PENDING_VOIDS.clear();
+		voidLogged = false;
 		SHAPES.clear();
 		FILL.clear();
 		LAYERS.clear();
@@ -331,7 +390,8 @@ public final class HostCollision {
 		HalfCraft.LOG.info("HalfCraft: collision cleared (epoch {})", newEpoch);
 	}
 
-	private static void readRegion(MemorySegment s, long p) {
+	// package-private for HostCollisionTest
+	static void readRegion(MemorySegment s, long p) {
 		int minX = s.get(JAVA_INT, p + COL_REGION_MIN_X);
 		int minY = s.get(JAVA_INT, p + COL_REGION_MIN_Y);
 		int minZ = s.get(JAVA_INT, p + COL_REGION_MIN_Z);
@@ -386,10 +446,58 @@ public final class HostCollision {
 		for (int rx = Math.floorDiv(minX, REGION_SIZE); rx <= Math.floorDiv(maxX, REGION_SIZE); rx++) {
 			for (int ry = Math.floorDiv(minY, REGION_SIZE); ry <= Math.floorDiv(maxY, REGION_SIZE); ry++) {
 				for (int rz = Math.floorDiv(minZ, REGION_SIZE); rz <= Math.floorDiv(maxZ, REGION_SIZE); rz++) {
-					KNOWN_REGIONS.add(regionKey(rx, ry, rz));
+					long key = regionKey(rx, ry, rz);
+					RegionVoid voids = PENDING_VOIDS.remove(key);
+					if (voids != null) {
+						VOIDS.put(key, voids);
+					} else {
+						VOIDS.remove(key); // sent again without kColVoid: no void left in it
+					}
+					KNOWN_REGIONS.add(key);
 				}
 			}
 		}
+	}
+
+	/** A region's void, which shows once its kColRegion comes (see {@link #voidLayersAt}). */
+	// package-private for HostCollisionTest
+	static void readVoid(MemorySegment s, long p) {
+		int minX = s.get(JAVA_INT, p + COL_REGION_MIN_X);
+		int minY = s.get(JAVA_INT, p + COL_REGION_MIN_Y);
+		int minZ = s.get(JAVA_INT, p + COL_REGION_MIN_Z);
+		int msgEpoch = s.get(JAVA_INT, p + COL_REGION_EPOCH);
+		int count = s.get(JAVA_INT, p + COL_REGION_COUNT);
+		adoptEpochIfFresh(msgEpoch);
+		if (msgEpoch != epoch) {
+			return; // stale void from before a world change
+		}
+		int rx = Math.floorDiv(minX, REGION_SIZE), ry = Math.floorDiv(minY, REGION_SIZE), rz = Math.floorDiv(minZ, REGION_SIZE);
+		PENDING_VOIDS.put(regionKey(rx, ry, rz), parseVoid(s, p));
+		if (!voidLogged) {
+			voidLogged = true;
+			HalfCraft.LOG.info("HalfCraft: first void region ({}, {}, {}) in epoch {} ({} blocks partly void)", rx, ry, rz, msgEpoch, count);
+		}
+	}
+
+	/** The void a kColVoid payload at {@code payload} describes. Pure: it logs nothing and stores nothing. */
+	// package-private for HostCollisionTest
+	static RegionVoid parseVoid(MemorySegment s, long payload) {
+		int count = s.get(JAVA_INT, payload + COL_REGION_COUNT);
+		long kindsAt = payload + COL_REGION_HEADER_BYTES;
+		byte[] kinds = new byte[VOID_BLOCKS];
+		MemorySegment.copy(s, JAVA_BYTE, kindsAt, kinds, 0, VOID_BLOCKS);
+		long[][] layers = new long[VOID_BLOCKS][];
+		long layersAt = kindsAt + VOID_BLOCKS;
+		int some = 0; // how many partly void blocks came before this one
+		for (int i = 0; i < VOID_BLOCKS; i++) {
+			if (kinds[i] == VOID_SOME) {
+				if (some < count) {
+					layers[i] = readLayers(s, layersAt + some * VOID_LAYERS_BYTES);
+				}
+				some++;
+			}
+		}
+		return new RegionVoid(kinds, layers);
 	}
 
 	private static void readTris(MemorySegment s, long p) {

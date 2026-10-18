@@ -269,6 +269,14 @@ public final class HostLink {
 		}
 
 		/**
+		 * Half-Life lets no new cell of its map be dug (hc_dig 0, or no HalfCraft shader DLL): what was dug
+		 * stays dug.
+		 */
+		public boolean digOff() {
+			return (this.flags & HOST_DIG_OFF) != 0;
+		}
+
+		/**
 		 * How much smaller than Half-Life's viewport the overlay is drawn (hc_overlay_scale), its gui scale
 		 * alike; Half-Life scales it back up. 1 from a Half-Life before it.
 		 */

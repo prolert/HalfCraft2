@@ -4,18 +4,26 @@ package dev.halfcraft.world;
 public final class HostTri {
 	/** Surfaces at most ~45 degrees from flat can be walked on. */
 	public static final double WALKABLE_NY = 0.7;
+	/** The lowest bit of the DigMaterial in a face's flags (the host's PRIM_MATERIAL_SHIFT). */
+	public static final int MATERIAL_SHIFT = 8;
 
 	public final double ax, ay, az, bx, by, bz, cx, cy, cz;
 	public final double nx, ny, nz; // unit normal (winding is not trusted; use |ny|)
 	public final double minX, minY, minZ, maxX, maxY, maxZ;
 	public final boolean stairHelper;
 	public final boolean walkable;
+	/** The Proto.DIG_* material of a diggable face (see {@link #diggable()}), 0 on one that can't be dug. */
+	public final int digMaterial;
 
 	public HostTri(float[] v, int o, boolean stairHelper) {
 		this(v, o, stairHelper ? dev.halfcraft.link.Proto.TRI_STAIR_HELPER : 0);
 	}
 
-	/** {@code flags}: the triangle's Proto.TRI_* flags as Half-Life sent them. */
+	/**
+	 * {@code flags}: the triangle's Proto.TRI_* flags as Half-Life sent them. With TRI_DIGGABLE, bits 8-15
+	 * are its Proto.DIG_* material: none given (0) digs as stone, one this mod doesn't know passes through
+	 * as it came (DigMaterials makes stone of it).
+	 */
 	public HostTri(float[] v, int o, int flags) {
 		boolean stairHelper = (flags & dev.halfcraft.link.Proto.TRI_STAIR_HELPER) != 0;
 		this.ax = v[o];
@@ -48,6 +56,20 @@ public final class HostTri {
 		this.maxZ = Math.max(this.az, Math.max(this.bz, this.cz));
 		this.stairHelper = stairHelper;
 		this.walkable = stairHelper || Math.abs(this.ny) >= WALKABLE_NY;
+		this.digMaterial = digMaterialOf(flags);
+	}
+
+	private static int digMaterialOf(int flags) {
+		if ((flags & dev.halfcraft.link.Proto.TRI_DIGGABLE) == 0) {
+			return 0;
+		}
+		int material = flags >>> MATERIAL_SHIFT & 0xFF;
+		return material == dev.halfcraft.link.Proto.DIG_NONE ? dev.halfcraft.link.Proto.DIG_STONE : material;
+	}
+
+	/** Minecraft can dig the world brush this face belongs to out (TRI_DIGGABLE). */
+	public boolean diggable() {
+		return this.digMaterial != 0;
 	}
 
 	public boolean degenerate() {
