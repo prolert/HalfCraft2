@@ -13,6 +13,7 @@ public final class HalfCraftClient implements ClientModInitializer {
 		HostCommands.register();
 
 		ClientTickEvents.END_CLIENT_TICK.register(HostClient::clientTick);
+		ClientTickEvents.END_CLIENT_TICK.register(HostDigClient::tick);
 		HostScreenshots.init();
 		// Half-Life draws the real NPC; its Minecraft stand-in is only a hitbox.
 		EntityRenderers.register(HostCombat.HOST_ACTOR, NoopRenderer::new);

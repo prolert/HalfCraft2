@@ -3,6 +3,7 @@ package dev.halfcraft.client.render;
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.halfcraft.HalfCraft;
+import dev.halfcraft.client.HostDigClient;
 import dev.halfcraft.link.Proto;
 import dev.halfcraft.link.HostLink;
 import dev.halfcraft.link.ProtoStructs;
@@ -411,7 +412,7 @@ public final class WorldExporter {
 		return 0xFF000000 | (argb & 0xFF) << 16 | (argb & 0xFF00) | (argb >> 16 & 0xFF);
 	}
 
-	/** Cracks over blocks being mined (ours and anyone else's). */
+	/** Cracks over blocks being mined (ours and anyone else's), and over the cell of Half-Life's wall the player mines. */
 	private static void addCracks(ClientLevel level) {
 		for (BlockDestructionProgress progress : ((dev.halfcraft.client.mixin.ClientLevelAccessor) level).halfcraft$destroyingBlocks().values()) {
 			int stage = progress.getProgress();
@@ -423,12 +424,20 @@ public final class WorldExporter {
 			if (shape.isEmpty()) {
 				continue;
 			}
-			AABB box = shape.bounds().move(pos).inflate(0.004);
-			ENTITIES.add(new ProtoStructs.WorldEntity(
-				Proto.WE_CRACK, pos.hashCode(), (float) box.minX, (float) box.minY, (float) box.minZ, 0.0F, 0.0F, 1.0F,
-				new float[] { (float) box.getXsize(), (float) box.getYsize(), (float) box.getZsize() }, atlas.crackUv(stage), 0
-			));
+			addCrack(pos, shape.bounds().move(pos).inflate(0.004), stage);
 		}
+		int[] dig = HostDigClient.crack();
+		if (dig != null && ENTITIES.size() < Proto.MAX_WORLD_ENTITIES) {
+			BlockPos pos = new BlockPos(dig[0], dig[1], dig[2]);
+			addCrack(pos, new AABB(pos).inflate(0.004), dig[3]);
+		}
+	}
+
+	private static void addCrack(BlockPos pos, AABB box, int stage) {
+		ENTITIES.add(new ProtoStructs.WorldEntity(
+			Proto.WE_CRACK, pos.hashCode(), (float) box.minX, (float) box.minY, (float) box.minZ, 0.0F, 0.0F, 1.0F,
+			new float[] { (float) box.getXsize(), (float) box.getYsize(), (float) box.getZsize() }, atlas.crackUv(stage), 0
+		));
 	}
 
 	/** The item's icon in the combined atlas {u0, v0, u1, v1}, or null. */
@@ -443,8 +452,9 @@ public final class WorldExporter {
 	}
 
 	/**
-	 * Outline for Half-Life to draw: the targeted block, or where a held block would go on Half-Life
-	 * ground. None while Minecraft's hud is hidden (F1), which hides Minecraft's own outline too.
+	 * Outline for Half-Life to draw: the targeted block, where a held block would go on Half-Life
+	 * ground, or the cell of Half-Life's wall that attacking would mine. None while Minecraft's hud is
+	 * hidden (F1), which hides Minecraft's own outline too.
 	 */
 	private static float[] selection(Minecraft minecraft, ClientLevel level) {
 		HitResult hit = minecraft.hitResult;
@@ -454,7 +464,8 @@ public final class WorldExporter {
 		BlockPos pos = blockHit.getBlockPos();
 		if (blockHit instanceof HostClip.HostHitResult) {
 			if (!(minecraft.player.getMainHandItem().getItem() instanceof BlockItem)) {
-				return null;
+				BlockPos dig = HostDigClient.target(minecraft);
+				return dig == null ? null : new float[] { dig.getX(), dig.getY(), dig.getZ(), dig.getX() + 1, dig.getY() + 1, dig.getZ() + 1 };
 			}
 			return new float[] { pos.getX(), pos.getY(), pos.getZ(), pos.getX() + 1, pos.getY() + 1, pos.getZ() + 1 };
 		}
