@@ -4,6 +4,7 @@ import dev.halfcraft.HalfCraft;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -132,7 +133,8 @@ public final class Rollback {
 			readSnapshots(root.getListOrEmpty("latest"), blocks, LATEST);
 			playthrough = readPlaythrough(root);
 			forgotten = ForgottenBlocks.of(root.getLongArray("forgotten").orElse(new long[0]));
-			lastCheckpoint = root.getLongOr("last_checkpoint", 0L);
+			// "checkpoints": its name in a block log from before it was renamed
+			lastCheckpoint = root.getLongOr("last_checkpoint", root.getLongOr("checkpoints", 0L));
 			HalfCraft.LOG.info("HalfCraft: rollback tracks {} blocks; {}", ORIGINALS.size(), describe());
 		} catch (IOException | RuntimeException e) {
 			HalfCraft.LOG.warn("HalfCraft: couldn't read the rollback block log {}", file, e);
@@ -555,7 +557,8 @@ public final class Rollback {
 				// numbered as they're written, so the oldest one kept has the lowest number
 				forgotten.prune(number(all.get(kept - 1)));
 			}
-		} catch (IOException e) {
+		} catch (IOException | UncheckedIOException e) {
+			// the listing's stream throws the unchecked one; either way the block log is still written after
 			HalfCraft.LOG.warn("HalfCraft: couldn't prune old checkpoints", e);
 		}
 	}
