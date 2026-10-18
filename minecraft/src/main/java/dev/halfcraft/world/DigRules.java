@@ -11,7 +11,8 @@ import org.jspecify.annotations.Nullable;
  * brushes and its void beyond the map, joined) that nothing dug or built yet, and not the map's sky.
  * Revealed, a cell is dug and holds the block; a cell only partly rock keeps Half-Life's surface, and
  * the hole's walls show the rest. Rock mostly void (behind the map) is stone; inside a thick wall it is
- * the wall's material.
+ * the wall's material. While Half-Life lets nothing more be dug, only void is revealed: a cell with a
+ * brush in it would be cut out of Half-Life's walls.
  */
 public final class DigRules {
 	// sub-voxels of a cell (8 layers of 64)
@@ -49,19 +50,29 @@ public final class DigRules {
 
 	/**
 	 * The cells around the dug cell (x, y, z) that are revealed, its {@code material} opened. A neighbour
-	 * is revealed when, checked in this order, its region is known, it isn't the map's sky (the sky's
-	 * brushes are rock to {@link #whollyRock}, and a block in one would hang against the skybox), it is
-	 * wholly rock, it isn't dug and Minecraft has nothing in it.
+	 * is revealed when, checked in this order: its region is known; it isn't the map's sky alone (all its
+	 * brushes the sky's and none of it void: the sky's brushes are rock to {@link #whollyRock}, and a block
+	 * in one would hang against the skybox; one partly void is revealed, or the tunnel would open into the
+	 * void there); with {@code brushlessOnly} (Half-Life lets nothing more be dug), it holds none of
+	 * Half-Life's brushes, so marking it dug cuts nothing out of Half-Life's walls; it is wholly rock; it
+	 * isn't dug; and Minecraft has nothing in it.
 	 */
-	public static List<Reveal> reveals(Cells cells, int x, int y, int z, int material) {
+	public static List<Reveal> reveals(Cells cells, int x, int y, int z, int material, boolean brushlessOnly) {
 		List<Reveal> out = new ArrayList<>();
 		for (int[] side : SIDES) {
 			int nx = x + side[0], ny = y + side[1], nz = z + side[2];
-			if (!cells.known(nx, ny, nz) || cells.sky(nx, ny, nz)) {
+			if (!cells.known(nx, ny, nz)) {
 				continue;
 			}
 			long[] voids = cells.voids(nx, ny, nz);
-			if (whollyRock(cells.occupancy(nx, ny, nz), voids) && !cells.dug(nx, ny, nz) && cells.air(nx, ny, nz)) {
+			if (voids == null && cells.sky(nx, ny, nz)) {
+				continue;
+			}
+			long[] occupancy = cells.occupancy(nx, ny, nz);
+			if (brushlessOnly && occupancy != null) {
+				continue;
+			}
+			if (whollyRock(occupancy, voids) && !cells.dug(nx, ny, nz) && cells.air(nx, ny, nz)) {
 				out.add(new Reveal(nx, ny, nz, revealMaterial(voids, material)));
 			}
 		}

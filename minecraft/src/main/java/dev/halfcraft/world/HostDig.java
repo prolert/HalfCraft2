@@ -5,6 +5,7 @@ import dev.halfcraft.link.HostLink;
 import dev.halfcraft.mobs.HostNav;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentRegistry;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentSyncPredicate;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentType;
@@ -31,8 +32,9 @@ import org.jspecify.annotations.Nullable;
  * Minecraft collides with), with the drops of its material's block. Around a dug cell, the cells wholly
  * rock to a tunnel are revealed ({@link DigRules}): dug too, with their material's block put in them,
  * which the rollback leaves alone. The same happens when a block in a dug cell goes, however it goes (a
- * player, TNT, a piston). Which cells are dug is kept per chunk ({@link #DUG}), saved with the world and
- * synced to every player.
+ * player, TNT, a piston); while Half-Life lets nothing more be dug, only the void beyond the map is
+ * revealed. Which cells are dug is kept per chunk ({@link #DUG}), saved with the world and synced to
+ * every player.
  */
 public final class HostDig {
 	public static final AttachmentType<DugColumn> DUG = AttachmentRegistry.<DugColumn>create(Identifier.fromNamespaceAndPath(HalfCraft.MOD_ID, "dug"),
@@ -131,9 +133,9 @@ public final class HostDig {
 
 	/**
 	 * LevelChunk.setBlockState, after: a block that went from a dug cell (mined, blown up, pushed away)
-	 * reveals the rock around it, opened as what it was, on the next tick. Nothing while Half-Life lets
-	 * nothing more be dug (hc_dig 0, or no shader DLL): the cells dug stay, none are added. Leaves the
-	 * world alone.
+	 * reveals the rock around it, opened as what it was, on the next tick; while Half-Life lets nothing
+	 * more be dug (hc_dig 0, or no shader DLL), only the void beyond the map around it, or the tunnel
+	 * would open into it (see {@link #reveal}). Leaves the world alone.
 	 */
 	public static void afterChange(LevelChunk chunk, BlockPos pos, @Nullable BlockState previous, BlockState now) {
 		if (previous == null || previous.canBeReplaced() || !now.canBeReplaced()) {
@@ -142,7 +144,7 @@ public final class HostDig {
 		if (!(chunk.getLevel() instanceof ServerLevel level) || !level.getServer().isSameThread() || !HostNav.inMirror(level)) {
 			return;
 		}
-		if (column(chunk).has(pos.getX(), pos.getY(), pos.getZ()) && !digOff()) {
+		if (column(chunk).has(pos.getX(), pos.getY(), pos.getZ())) {
 			PENDING.add(new Pending(level, pos.immutable(), materialOf(previous), 0));
 		}
 	}
@@ -181,9 +183,15 @@ public final class HostDig {
 		return true;
 	}
 
+	/**
+	 * Reveals the rock around a dug cell. While Half-Life lets nothing more be dug, only the cells without
+	 * its brushes (void beyond the map): marking one with a brush dug would cut it out of Half-Life's walls,
+	 * and void has no collision but the block put there.
+	 */
 	private static void reveal(ServerLevel level, BlockPos pos, int material) {
-		int revealed = 0;
-		for (DigRules.Reveal r : DigRules.reveals(cells(level), pos.getX(), pos.getY(), pos.getZ(), material)) {
+		boolean voidOnly = digOff();
+		List<DigRules.Reveal> reveals = DigRules.reveals(cells(level), pos.getX(), pos.getY(), pos.getZ(), material, voidOnly);
+		for (DigRules.Reveal r : reveals) {
 			BlockPos cell = new BlockPos(r.x(), r.y(), r.z());
 			LevelChunk chunk = level.getChunkAt(cell);
 			chunk.setAttached(DUG, column(chunk).with(r.x(), r.y(), r.z()));
@@ -192,10 +200,11 @@ public final class HostDig {
 				level.setBlock(cell, state, Block.UPDATE_ALL);
 				Rollback.forget(cell);
 			});
-			revealed++;
 		}
-		if (revealed > 0) {
-			HalfCraft.LOG.info("HalfCraft: {} cells around {} revealed", revealed, pos.toShortString());
+		if (!reveals.isEmpty()) {
+			HalfCraft.LOG.info("HalfCraft: {} cells around {} revealed: {}{}", reveals.size(), pos.toShortString(),
+				reveals.stream().map(r -> r.x() + ", " + r.y() + ", " + r.z()).collect(Collectors.joining("; ")),
+				voidOnly ? " (void only: Half-Life lets nothing more be dug)" : "");
 		}
 	}
 

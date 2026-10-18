@@ -72,7 +72,7 @@ class DigRulesTest {
 	void shouldRevealAWhollyRockNeighbourWithTheMiningMaterial() {
 		World w = new World();
 		w.occupancy.put(new Pos(1, 0, 0), FULL);
-		assertEquals(List.of(new DigRules.Reveal(1, 0, 0, DIG_IRON)), DigRules.reveals(w, 0, 0, 0, DIG_IRON));
+		assertEquals(List.of(new DigRules.Reveal(1, 0, 0, DIG_IRON)), DigRules.reveals(w, 0, 0, 0, DIG_IRON, false));
 	}
 
 	@Test
@@ -80,14 +80,14 @@ class DigRulesTest {
 		World w = new World();
 		w.occupancy.put(new Pos(0, -1, 0), LOWER);
 		w.voids.put(new Pos(0, -1, 0), UPPER);
-		assertEquals(List.of(new DigRules.Reveal(0, -1, 0, DIG_STONE)), DigRules.reveals(w, 0, 0, 0, DIG_PLANKS));
+		assertEquals(List.of(new DigRules.Reveal(0, -1, 0, DIG_STONE)), DigRules.reveals(w, 0, 0, 0, DIG_PLANKS, false));
 	}
 
 	@Test
 	void shouldLeaveAPartlyRockNeighbour() {
 		World w = new World();
 		w.occupancy.put(new Pos(0, 0, 1), lessOne(FULL));
-		assertEquals(List.of(), DigRules.reveals(w, 0, 0, 0, DIG_STONE));
+		assertEquals(List.of(), DigRules.reveals(w, 0, 0, 0, DIG_STONE, false));
 	}
 
 	@Test
@@ -99,7 +99,7 @@ class DigRulesTest {
 		w.dug.add(new Pos(-1, 0, 0));
 		w.built.add(new Pos(0, 0, -1));
 		w.unknown.add(new Pos(0, 1, 0));
-		assertEquals(List.of(), DigRules.reveals(w, 0, 0, 0, DIG_STONE));
+		assertEquals(List.of(), DigRules.reveals(w, 0, 0, 0, DIG_STONE, false));
 	}
 
 	@Test
@@ -108,7 +108,29 @@ class DigRulesTest {
 		w.occupancy.put(new Pos(0, 1, 0), FULL); // inside the skybox's brush: its voxels are rock too
 		w.sky.add(new Pos(0, 1, 0));
 		w.occupancy.put(new Pos(0, -1, 0), FULL);
-		assertEquals(List.of(new DigRules.Reveal(0, -1, 0, DIG_IRON)), DigRules.reveals(w, 0, 0, 0, DIG_IRON));
+		assertEquals(List.of(new DigRules.Reveal(0, -1, 0, DIG_IRON)), DigRules.reveals(w, 0, 0, 0, DIG_IRON, false));
+	}
+
+	@Test
+	void shouldRevealASkyNeighbourThatIsPartlyVoid() {
+		// the outside of the skybox's brush: its voxels the sky's, the rest of it beyond the map
+		World w = new World();
+		w.occupancy.put(new Pos(0, 1, 0), LOWER);
+		w.voids.put(new Pos(0, 1, 0), UPPER);
+		w.sky.add(new Pos(0, 1, 0));
+		assertEquals(List.of(new DigRules.Reveal(0, 1, 0, DIG_STONE)), DigRules.reveals(w, 0, 0, 0, DIG_IRON, false));
+	}
+
+	@Test
+	void shouldRevealOnlyNeighboursWithoutBrushesWhileNothingMoreMayBeDug() {
+		World w = new World();
+		w.voids.put(new Pos(-1, 0, 0), FULL); // void only, beyond the map
+		w.occupancy.put(new Pos(1, 0, 0), FULL); // inside a thick wall
+		w.occupancy.put(new Pos(0, 0, 1), LOWER); // a wall's back, void behind it
+		w.voids.put(new Pos(0, 0, 1), UPPER);
+		assertEquals(List.of(new DigRules.Reveal(-1, 0, 0, DIG_STONE)), DigRules.reveals(w, 0, 0, 0, DIG_IRON, true));
+		assertEquals(List.of(new DigRules.Reveal(0, 0, 1, DIG_STONE), new DigRules.Reveal(-1, 0, 0, DIG_STONE), new DigRules.Reveal(1, 0, 0, DIG_IRON)),
+			DigRules.reveals(w, 0, 0, 0, DIG_IRON, false));
 	}
 
 	@Test
@@ -119,7 +141,7 @@ class DigRulesTest {
 			w.occupancy.put(p, FULL);
 		}
 		List<DigRules.Reveal> expected = sides.stream().map(p -> new DigRules.Reveal(p.x(), p.y(), p.z(), DIG_DIRT)).toList();
-		assertEquals(expected, DigRules.reveals(w, 5, 6, 7, DIG_DIRT));
+		assertEquals(expected, DigRules.reveals(w, 5, 6, 7, DIG_DIRT, false));
 	}
 
 	@Test
