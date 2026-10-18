@@ -188,7 +188,10 @@ public final class HostDig {
 			LevelChunk chunk = level.getChunkAt(cell);
 			chunk.setAttached(DUG, column(chunk).with(r.x(), r.y(), r.z()));
 			BlockState state = stateFor(r.material());
-			Rollback.untracked(() -> level.setBlock(cell, state, Block.UPDATE_ALL));
+			Rollback.untracked(() -> {
+				level.setBlock(cell, state, Block.UPDATE_ALL);
+				Rollback.forget(cell);
+			});
 			revealed++;
 		}
 		if (revealed > 0) {

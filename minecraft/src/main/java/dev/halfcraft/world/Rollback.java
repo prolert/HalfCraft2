@@ -62,7 +62,9 @@ import org.jspecify.annotations.Nullable;
  * change, and its latest. Half-Life saving makes a checkpoint (the tracked blocks and the player as
  * they are now, in a file named by an id the save itself carries); Half-Life loading a save
  * restores it: tracked blocks go back to the checkpoint's state, or to how they were before
- * anything changed them if they changed only after it. Any save, in any order. Dropped items,
+ * anything changed them if they changed only after it. Any save, in any order. A block the rollback
+ * {@link #forget}s is tracked afresh from its next change, and a checkpoint from before it was
+ * forgotten no longer has it (see {@link ForgottenBlocks}). Dropped items,
  * arrows, lit TNT and falling blocks go too; the player gets back inventory, armour, health,
  * hunger, experience and effects (not the position: Half-Life puts the player where the save has
  * them).
@@ -92,6 +94,9 @@ public final class Rollback {
 
 	private static final Long2ObjectOpenHashMap<Snapshot> ORIGINALS = new Long2ObjectOpenHashMap<>();
 	private static final Long2ObjectOpenHashMap<Snapshot> LATEST = new Long2ObjectOpenHashMap<>();
+	// the blocks forget(...) dropped, and the number of the last checkpoint written (0: none, or only ones from before they were numbered)
+	private static ForgottenBlocks forgotten = new ForgottenBlocks();
+	private static long checkpoints;
 
 	// How often the things a sweep removed as chunks loaded are logged at most.
 	private static final long SWEEP_LOG_MS = 5000;
@@ -112,6 +117,8 @@ public final class Rollback {
 		ORIGINALS.clear();
 		LATEST.clear();
 		playthrough = null;
+		forgotten = new ForgottenBlocks();
+		checkpoints = 0;
 		Path file = dir(opened).resolve("blocks.nbt");
 		if (!Files.exists(file)) {
 			return;
@@ -122,6 +129,8 @@ public final class Rollback {
 			readSnapshots(root.getListOrEmpty("originals"), blocks, ORIGINALS);
 			readSnapshots(root.getListOrEmpty("latest"), blocks, LATEST);
 			playthrough = readPlaythrough(root);
+			forgotten = ForgottenBlocks.of(root.getLongArray("forgotten").orElse(new long[0]));
+			checkpoints = root.getLongOr("checkpoints", 0L);
 			HalfCraft.LOG.info("HalfCraft: rollback tracks {} blocks; {}", ORIGINALS.size(), describe());
 		} catch (IOException | RuntimeException e) {
 			HalfCraft.LOG.warn("HalfCraft: couldn't read the rollback block log {}", file, e);
@@ -141,6 +150,8 @@ public final class Rollback {
 		ORIGINALS.clear();
 		LATEST.clear();
 		playthrough = null;
+		forgotten = new ForgottenBlocks();
+		checkpoints = 0;
 	}
 
 	/** LevelChunk.setBlockState, before: the first change to a block remembers how it was. */
@@ -171,6 +182,21 @@ public final class Rollback {
 			change.run();
 		} finally {
 			untracked--;
+		}
+	}
+
+	/**
+	 * The block at pos is no longer the rollback's: what it tracked of it goes, and the checkpoints written
+	 * so far don't put it back; its next tracked change tracks it afresh. For the blocks revealed around a
+	 * hole dug in Half-Life's walls (with {@link #untracked}): a block built in the wall's air and taken
+	 * away, or water that came and went, would put that air back. Server thread only.
+	 */
+	public static void forget(BlockPos pos) {
+		long key = pos.asLong();
+		boolean tracked = ORIGINALS.remove(key) != null;
+		tracked |= LATEST.remove(key) != null;
+		if (tracked) {
+			forgotten.forget(key, checkpoints);
 		}
 	}
 
@@ -219,6 +245,7 @@ public final class Rollback {
 		}
 		CompoundTag root = new CompoundTag();
 		root.put("blocks", blocks);
+		root.putLong("number", ++checkpoints);
 		writePlaythrough(root);
 		if (player != null) {
 			root.put("player", savePlayer(player));
@@ -254,12 +281,14 @@ public final class Rollback {
 		HeldBlocks.forget();  // the gravity gun's cubes went with the level; the checkpoint has their blocks
 		Long2ObjectOpenHashMap<Snapshot> target = new Long2ObjectOpenHashMap<>();
 		readSnapshots(root.getListOrEmpty("blocks"), level.registryAccess().lookupOrThrow(Registries.BLOCK), target);
+		long number = root.getLongOr("number", 0L);
 
 		LongOpenHashSet keys = new LongOpenHashSet(ORIGINALS.keySet());
 		keys.addAll(target.keySet());
 		int changed = 0;
 		for (long key : keys) {
-			Snapshot want = target.containsKey(key) ? target.get(key) : ORIGINALS.get(key);
+			// a block forgotten since the checkpoint was written doesn't go back to what it has there
+			Snapshot want = forgotten.wanted(key, number, target.get(key), ORIGINALS.get(key));
 			if (want != null && putBack(level, key, want)) {
 				changed++;
 			}
@@ -484,6 +513,8 @@ public final class Rollback {
 		CompoundTag root = new CompoundTag();
 		root.put("originals", writeSnapshots(ORIGINALS));
 		root.put("latest", writeSnapshots(LATEST));
+		root.putLongArray("forgotten", forgotten.pairs());
+		root.putLong("checkpoints", checkpoints);
 		writePlaythrough(root);
 		Path file = dir(of).resolve("blocks.nbt");
 		try {
