@@ -26,6 +26,21 @@ SHADER_SECONDS = 5400
 # msbuild /m puts its node's number in front of each line
 NODE = re.compile(r"^\s*\d+>")
 PROJECT = re.compile(r" \[[^\]]+\]$")
+# ShaderCompile2's summary of a compile, warnings/errors (each distinct message counted once, then how often it came).
+# it prints nothing at all for a shader it skips, the crc of whose source and includes its .vcs was compiled from: run
+# on build\shaders with every shader up to date, it exits 0 with no output on stdout or stderr, so no line there is no
+# failure. a compile with an hlsl error exits 1 and removes the failed .vcs itself (WARNINGS/ERRORS 23/1)
+SHADER_SUMMARY = re.compile(r"WARNINGS/ERRORS (\d+)/(\d+)")
+SHADER_ERROR = re.compile(r"\berror\b", re.IGNORECASE)
+
+
+def shader_errors(output: str) -> int | None:
+    """the errors ShaderCompile2's output counts on its WARNINGS/ERRORS line, or None without one (a skipped shader).
+    its progress lines end in a bare \\r, so lines split at either.
+    """
+    counts = [SHADER_SUMMARY.fullmatch(line.strip()) for line in re.split(r"[\r\n]", output)]
+    found = [int(match.group(2)) for match in counts if match]
+    return sum(found) if found else None
 
 
 @dataclass(frozen=True)
@@ -143,6 +158,12 @@ def build_shaders(engines: list[Engine]) -> None:
         command = [src / "devtools/bin/ShaderCompile2.exe", "-ver", "20b", "-shaderpath", stage, shader.source]
         compiled = commands.run(command, timeout=SHADER_SECONDS, what=f"ShaderCompile2 on {shader.source}", cwd=REPO, check=False, capture=True)
         vcs = stage / f"shaders/fxc/{shader.name}.vcs"
+        # the stage is kept, so a .vcs there may be an earlier build's: an exit 0 with errors mustn't ship it
+        output = f"{compiled.stdout}\n{compiled.stderr}"
+        if errors := shader_errors(output):
+            said = [line.strip() for line in re.split(r"[\r\n]", output) if SHADER_ERROR.search(line) and not SHADER_SUMMARY.search(line)]
+            print("\n".join(said))
+            raise ToolError(f"ShaderCompile2 found {errors} error(s) in {shader.source} (exit {compiled.returncode})")
         if compiled.returncode != 0 or not vcs.is_file():
             raise ToolError(f"ShaderCompile2 failed on {shader.source} ({compiled.returncode})")
         if shader.combos is not None and struct.unpack_from("<iii", vcs.read_bytes()) != (6, shader.combos, shader.dynamic):  # version, combos, dynamic combos
