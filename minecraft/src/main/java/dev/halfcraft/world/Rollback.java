@@ -99,6 +99,8 @@ public final class Rollback {
 	private static @Nullable Playthrough playthrough;
 	private static int sweptSinceLog;
 	private static long sweepLoggedMs;
+	// How many untracked(...) calls are running: their changes aren't logged.
+	private static int untracked;
 
 	private Rollback() {
 	}
@@ -158,6 +160,20 @@ public final class Rollback {
 		}
 	}
 
+	/**
+	 * Runs a change the rollback leaves alone (calls nest): the blocks revealed around a hole dug in
+	 * Half-Life's walls stay when a save is loaded, as the hole does (Half-Life's saves don't roll holes
+	 * back), or the tunnel would open into the void. Server thread only.
+	 */
+	public static void untracked(Runnable change) {
+		untracked++;
+		try {
+			change.run();
+		} finally {
+			untracked--;
+		}
+	}
+
 	/** A chunk unloads: its tracked blocks' block entities as they are now, before they're out of reach. */
 	public static void chunkUnloading(ServerLevel level, LevelChunk chunk) {
 		if (level != level.getServer().overworld() || ORIGINALS.isEmpty()) {
@@ -173,7 +189,7 @@ public final class Rollback {
 
 	private static boolean tracks(LevelChunk chunk) {
 		Level level = chunk.getLevel();
-		return level instanceof ServerLevel serverLevel && serverLevel.dimension() == Level.OVERWORLD && serverLevel.getServer().isSameThread();
+		return level instanceof ServerLevel serverLevel && serverLevel.dimension() == Level.OVERWORLD && serverLevel.getServer().isSameThread() && untracked == 0;
 	}
 
 	private static Snapshot capture(LevelChunk chunk, BlockPos pos) {

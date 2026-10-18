@@ -1,0 +1,219 @@
+package dev.halfcraft.world;
+
+import dev.halfcraft.HalfCraft;
+import dev.halfcraft.link.HostLink;
+import dev.halfcraft.mobs.HostNav;
+import java.util.ArrayList;
+import java.util.List;
+import net.fabricmc.fabric.api.attachment.v1.AttachmentRegistry;
+import net.fabricmc.fabric.api.attachment.v1.AttachmentSyncPredicate;
+import net.fabricmc.fabric.api.attachment.v1.AttachmentType;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.LevelEvent;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Digging into Half-Life's walls. Half-Life's walls, floors and ceilings are geometry, not blocks; mining
+ * one opens the cell its surface is in: the cell is dug (Half-Life cuts it out of what it draws and what
+ * Minecraft collides with), with the drops of its material's block. Around a dug cell, the cells wholly
+ * rock to a tunnel are revealed ({@link DigRules}): dug too, with their material's block put in them,
+ * which the rollback leaves alone. The same happens when a block in a dug cell goes, however it goes (a
+ * player, TNT, a piston). Which cells are dug is kept per chunk ({@link #DUG}), saved with the world and
+ * synced to every player.
+ */
+public final class HostDig {
+	public static final AttachmentType<DugColumn> DUG = AttachmentRegistry.<DugColumn>create(Identifier.fromNamespaceAndPath(HalfCraft.MOD_ID, "dug"),
+		builder -> builder.persistent(DugColumn.CODEC).syncWith(DugColumn.STREAM_CODEC, AttachmentSyncPredicate.all()));
+
+	// how far from the player's eyes the middle of a cell they open may be
+	private static final double REACH = 8.0;
+	// how many ticks a reveal waits at most for Half-Life to send the regions around its cell
+	private static final int REVEAL_TRIES = 60;
+	// server thread only
+	private static final HostLink.HostState HOST = new HostLink.HostState();
+	// the reveals still to do; server thread only
+	private static final List<Pending> PENDING = new ArrayList<>();
+
+	/** A dug cell whose neighbours are to be revealed, opened as {@code material}; {@code tries} ticks left to wait. */
+	private record Pending(ServerLevel level, BlockPos pos, int material, int tries) {
+	}
+
+	private HostDig() {
+	}
+
+	/** Registers the attachment (by loading the class) and the reveals' tick, at mod start. */
+	public static void init() {
+		ServerTickEvents.END_SERVER_TICK.register(HostDig::serverTick);
+		// the levels go with the server
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> PENDING.clear());
+		HalfCraft.LOG.info("HalfCraft: digging into Half-Life's walls registered ({})", DUG.identifier());
+	}
+
+	/** The dug cells of a chunk's section (see {@link DugBits}), or null for none. Never change them. */
+	public static long @Nullable [] sectionBits(LevelChunk chunk, int sectionY) {
+		return column(chunk).bits(sectionY);
+	}
+
+	/** The block a Proto.DIG_* material digs as (stone for none, or one it doesn't know). */
+	public static BlockState stateFor(int material) {
+		return BuiltInRegistries.BLOCK.getValue(Identifier.parse(DigMaterials.blockId(material))).defaultBlockState();
+	}
+
+	private static int materialOf(BlockState state) {
+		return DigMaterials.material(BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
+	}
+
+	private static DugColumn column(LevelChunk chunk) {
+		DugColumn column = chunk.getAttached(DUG);
+		return column != null ? column : DugColumn.EMPTY;
+	}
+
+	// loads the cell's chunk: callers check it's loaded first
+	private static boolean isDug(Level level, BlockPos pos) {
+		return column(level.getChunkAt(pos)).has(pos.getX(), pos.getY(), pos.getZ());
+	}
+
+	// ---- opening ------------------------------------------------------------------------------
+
+	/**
+	 * A player mined Half-Life's wall out of this cell (the one its surface is in), made of
+	 * {@code material}: the cell is dug, with the drops and the sound of mining its block, and the rock
+	 * around it is revealed. Nothing when the player can't build here or reach it, the cell isn't loaded,
+	 * Half-Life lets nothing more be dug, the cell is dug already or a Minecraft block fills it. Server
+	 * thread only.
+	 */
+	public static void open(ServerLevel level, ServerPlayer player, BlockPos pos, int material) {
+		if (!HostNav.inMirror(level) || player.isSpectator() || !player.mayBuild() || !level.isLoaded(pos) || !inReach(player, pos) || digOff()
+			|| isDug(level, pos) || !level.getBlockState(pos).canBeReplaced()) {
+			return;
+		}
+		LevelChunk chunk = level.getChunkAt(pos);
+		chunk.setAttached(DUG, column(chunk).with(pos.getX(), pos.getY(), pos.getZ()));
+		BlockState state = stateFor(material);
+		if (!player.isCreative()) {
+			ItemStack tool = player.getMainHandItem();
+			ItemStack used = tool.copy();
+			// before mining: the tool may break in it
+			boolean harvest = player.hasCorrectToolForDrops(state);
+			tool.mineBlock(level, state, pos, player);
+			if (harvest) {
+				state.getBlock().playerDestroy(level, player, pos, state, null, used);
+			}
+		}
+		level.levelEvent(LevelEvent.PARTICLES_AND_SOUND_DESTROY_BLOCK, pos, Block.getId(state));
+		PENDING.add(new Pending(level, pos.immutable(), material, REVEAL_TRIES));
+		HalfCraft.LOG.info("HalfCraft: dug {} out of Half-Life's walls as {}", pos.toShortString(), DigMaterials.blockId(material));
+	}
+
+	private static boolean inReach(ServerPlayer player, BlockPos pos) {
+		return player.getEyePosition().distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= REACH * REACH;
+	}
+
+	private static boolean digOff() {
+		return HostLink.active() && HostLink.readHostState(HOST) && HOST.digOff();
+	}
+
+	// ---- revealing ----------------------------------------------------------------------------
+
+	/**
+	 * LevelChunk.setBlockState, after: a block that went from a dug cell (mined, blown up, pushed away)
+	 * reveals the rock around it, opened as what it was, on the next tick. Leaves the world alone.
+	 */
+	public static void afterChange(LevelChunk chunk, BlockPos pos, @Nullable BlockState previous, BlockState now) {
+		if (previous == null || previous.canBeReplaced() || !now.canBeReplaced()) {
+			return;
+		}
+		if (!(chunk.getLevel() instanceof ServerLevel level) || !level.getServer().isSameThread() || !HostNav.inMirror(level)) {
+			return;
+		}
+		if (column(chunk).has(pos.getX(), pos.getY(), pos.getZ())) {
+			PENDING.add(new Pending(level, pos.immutable(), materialOf(previous), REVEAL_TRIES));
+		}
+	}
+
+	private static void serverTick(MinecraftServer server) {
+		if (PENDING.isEmpty()) {
+			return;
+		}
+		// what revealing queues (a block it puts changes others) waits for the next tick
+		List<Pending> due = new ArrayList<>(PENDING);
+		PENDING.clear();
+		for (Pending p : due) {
+			if (!sidesKnown(p.pos()) && p.tries() > 1) {
+				PENDING.add(new Pending(p.level(), p.pos(), p.material(), p.tries() - 1));
+			} else {
+				reveal(p.level(), p.pos(), p.material());
+			}
+		}
+	}
+
+	private static boolean sidesKnown(BlockPos pos) {
+		for (Direction d : Direction.values()) {
+			BlockPos side = pos.relative(d);
+			if (!HostCollision.isKnown(side.getX(), side.getY(), side.getZ())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static void reveal(ServerLevel level, BlockPos pos, int material) {
+		int revealed = 0;
+		for (DigRules.Reveal r : DigRules.reveals(cells(level), pos.getX(), pos.getY(), pos.getZ(), material)) {
+			BlockPos cell = new BlockPos(r.x(), r.y(), r.z());
+			LevelChunk chunk = level.getChunkAt(cell);
+			chunk.setAttached(DUG, column(chunk).with(r.x(), r.y(), r.z()));
+			BlockState state = stateFor(r.material());
+			Rollback.untracked(() -> level.setBlock(cell, state, Block.UPDATE_ALL));
+			revealed++;
+		}
+		if (revealed > 0) {
+			HalfCraft.LOG.info("HalfCraft: {} cells around {} revealed", revealed, pos.toShortString());
+		}
+	}
+
+	/** The world around a dug cell as DigRules reads it. Loads no chunk: a cell in one not loaded is left alone (as if dug). */
+	private static DigRules.Cells cells(ServerLevel level) {
+		return new DigRules.Cells() {
+			@Override
+			public boolean known(int x, int y, int z) {
+				return HostCollision.isKnown(x, y, z);
+			}
+
+			@Override
+			public boolean dug(int x, int y, int z) {
+				BlockPos pos = new BlockPos(x, y, z);
+				return !level.isLoaded(pos) || isDug(level, pos);
+			}
+
+			@Override
+			public boolean air(int x, int y, int z) {
+				BlockPos pos = new BlockPos(x, y, z);
+				return level.isLoaded(pos) && level.getBlockState(pos).isAir();
+			}
+
+			@Override
+			public long @Nullable [] occupancy(int x, int y, int z) {
+				return HostCollision.layersAt(x, y, z);
+			}
+
+			@Override
+			public long @Nullable [] voids(int x, int y, int z) {
+				return HostCollision.voidLayersAt(x, y, z);
+			}
+		};
+	}
+}

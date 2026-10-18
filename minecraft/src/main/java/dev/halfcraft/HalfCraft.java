@@ -27,6 +27,8 @@ public final class HalfCraft implements ModInitializer {
 		dev.halfcraft.mobs.HostMobs.init();
 		// pets come along when Half-Life moves the player to another map
 		dev.halfcraft.mobs.PetsFollow.init();
+		// half-life's walls dig like blocks: the dug cells live in minecraft's chunks
+		dev.halfcraft.world.HostDig.init();
 		ServerLifecycleEvents.SERVER_STARTED.register(HalfCraft::configureServer);
 		// Half-Life's saves roll Minecraft's world and player back too
 		ServerLifecycleEvents.SERVER_STARTED.register(dev.halfcraft.world.Rollback::load);
