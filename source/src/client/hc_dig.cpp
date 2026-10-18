@@ -377,8 +377,8 @@ namespace halfcraft
 		force_vis(false);
 		g_holes_near = false;
 		auto& m = mask();
+		m.state = {};  // first: HalfCraft_DigMask mustn't hand the shader dll the texture released next
 		m.texture.release();
-		m.state = {};
 		m.built = false;
 		auto&                       d = store();
 		std::lock_guard<std::mutex> lock(d.lock);
