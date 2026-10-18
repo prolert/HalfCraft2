@@ -151,5 +151,9 @@ namespace halfcraft
 	/// for a dry one), where source would take a weapon out by itself (hc_weapons.cpp).
 	/// @return true when minecraft's hand picks the player's weapon instead: that one stays away
 	bool server_minecraft_picks_weapon(CBasePlayer* player, CBaseCombatWeapon* weapon);
+
+	/// CBasePlayer::SetupVisibility, once the player's eye is in the pvs: the cells dug near the player
+	/// (server/hc_dig.h) add the rooms behind them, so their npcs and props come to the client too.
+	void server_add_dig_pvs(CBasePlayer* player);
 #endif
 }

@@ -5,6 +5,7 @@
 #include "view.h"
 
 #include "tier0/valve_minmax_off.h"
+#include <algorithm>
 #include <atomic>
 #include <bitset>
 #include <cmath>
@@ -36,6 +37,11 @@ namespace halfcraft
 		constexpr float INTO_WALL = 0.5f;          // units behind the face under the crosshair: in the cell the face belongs to
 
 		ConVar hc_dig("hc_dig", "1", FCVAR_ARCHIVE, "halfcraft: 0 - minecraft digs no new cells out of half-life's walls (the ones dug stay dug)");
+
+		// r_novis and r_portalsopenall as they were before force_vis turned them on
+		bool g_vis_forced = false;
+		int  g_old_novis = 0;
+		int  g_old_portals = 0;
 
 		using SectionKey = std::tuple<int, int, int>;  // a section, minecraft section coords
 
@@ -110,6 +116,49 @@ namespace halfcraft
 			}
 			const int bit = dug_detail::bit_of(x, y, z);
 			return ((it->second.first.bits[bit >> 3] >> (bit & 7)) & 1) != 0;
+		}
+
+		/// whether a cell is dug in the current map (dig_set_slot has emptied the sections of other maps' slots)
+		bool any_dug()
+		{
+			auto&                       d = store();
+			std::lock_guard<std::mutex> lock(d.lock);
+			return std::any_of(d.sections.begin(), d.sections.end(), [](const auto& entry) { return entry.second.first.count > 0; });
+		}
+
+		/// sets a cvar to value unless it has it already (a missing one is left alone)
+		void set_cvar(ConVarRef& ref, int value)
+		{
+			if (ref.IsValid() && ref.GetInt() != value) {
+				ref.SetValue(value);
+			}
+		}
+
+		/// want: r_novis 1 and r_portalsopenall 1, so the rooms behind the holes are drawn (the map's vis hides them
+		/// behind its walls); otherwise their values from before come back. both are cheats: ConVar::SetValue doesn't
+		/// check FCVAR_CHEAT (the flag stays on them), but the engine puts cheats back to their defaults when sv_cheats
+		/// changes, so they're set again every frame.
+		void force_vis(bool want)
+		{
+			if (!want && !g_vis_forced) {
+				return;
+			}
+			static ConVarRef novis("r_novis"), portals("r_portalsopenall");
+			if (want) {
+				if (!g_vis_forced) {
+					g_old_novis = novis.IsValid() ? novis.GetInt() : 0;
+					g_old_portals = portals.IsValid() ? portals.GetInt() : 0;
+					g_vis_forced = true;
+					log_info("dig: this map has holes: r_novis 1, r_portalsopenall 1 (they were %d, %d)", g_old_novis, g_old_portals);
+				}
+				set_cvar(novis, 1);
+				set_cvar(portals, 1);
+			} else {
+				set_cvar(novis, g_old_novis);
+				set_cvar(portals, g_old_portals);
+				g_vis_forced = false;
+				log_info("dig: no holes here: r_novis %d, r_portalsopenall %d again", g_old_novis, g_old_portals);
+			}
 		}
 
 		/// hc_debug_dig_cell: one cell of its section's mask dug or filled, as if minecraft had sent it so
@@ -212,8 +261,15 @@ namespace halfcraft
 		return ready && hc_dig.GetBool();
 	}
 
+	void dig_update(const McVec& /*player*/, bool in_game)
+	{
+		// hc_dig 0 leaves the holes cut out (it only stops new ones): they're seen through all the same
+		force_vis(in_game && dig_shader_ready() && any_dug());
+	}
+
 	void dig_shutdown()
 	{
+		force_vis(false);
 		auto&                       d = store();
 		std::lock_guard<std::mutex> lock(d.lock);
 		d.sections.clear();

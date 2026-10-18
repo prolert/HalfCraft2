@@ -10,6 +10,7 @@
 #include "tier0/valve_minmax_off.h"
 #include <algorithm>
 #include <memory>
+#include <vector>
 
 #include "core/hc_collision.h"
 #include "core/hc_link.h"
@@ -44,8 +45,14 @@ namespace halfcraft
 		// still toggles the flashlight).
 		constexpr int   HIDDEN_HUD = HIDEHUD_HEALTH | HIDEHUD_WEAPONSELECTION | HIDEHUD_CROSSHAIR;
 		constexpr float PUPPET_GRACE_SECONDS = 0.5f;
+		// where the pvs looks around a dug cell's centre along each axis, units: 1 inside its face and 1 outside
+		// it (the centre is often in a brush, and a wall can end on the cell's face)
+		constexpr float       PVS_PROBE_INSIDE = static_cast<float>(UNITS_PER_BLOCK) / 2.0f - 1.0f;
+		constexpr float       PVS_PROBE_OUTSIDE = static_cast<float>(UNITS_PER_BLOCK) / 2.0f + 1.0f;
+		constexpr std::size_t PVS_NOT_LOGGED = static_cast<std::size_t>(-1);  // hc_debug_dig_pvs logged nothing yet
 
 		ConVar hc_debug_use("hc_debug_use", "0", 0, "halfcraft: log what half-life's use finds whenever it's pressed");
+		ConVar hc_debug_dig_pvs("hc_debug_dig_pvs", "0", 0, "halfcraft: log what the holes near the player add to its pvs");
 
 		float g_last_puppet_move = -1.0f;
 
@@ -137,10 +144,14 @@ namespace halfcraft
 				return source_box_dug(mins.Base(), maxs.Base(), slot_, [this](int x, int y, int z) { return dig_.dug(x, y, z); });
 			}
 
+			/// server_add_dig_pvs (shared/hc_hooks.h)
+			void add_dig_pvs(CBasePlayer* player);
+
 		private:
 			void update_hud(CBasePlayer* player, bool hide);
 			void update_use(CBasePlayer* player);
 			void outline_cut_pieces(CBasePlayer* player) const;
+			void add_pvs_point(const Vector& point);
 
 			Link                               link_;
 			bool                               link_ready_ = false;
@@ -159,6 +170,10 @@ namespace halfcraft
 			Checkpoints                        checkpoints_;
 			MapSlot                            slot_;
 			std::uint32_t                      epoch_ = ~0u;
+			std::vector<Vector>                pvs_points_;    // the dug cells near the player, this snapshot
+			std::vector<int>                   pvs_clusters_;  // the clusters they put in its pvs, after the eye's own
+			std::size_t                        pvs_logged_holes_ = PVS_NOT_LOGGED;  // hc_debug_dig_pvs's last line
+			std::size_t                        pvs_logged_clusters_ = PVS_NOT_LOGGED;
 		};
 
 		HalfCraftServerSystem g_server_system;
@@ -233,6 +248,49 @@ namespace halfcraft
 			}
 		}
 
+		void HalfCraftServerSystem::add_dig_pvs(CBasePlayer* player)
+		{
+			if (dig_.count() == 0) {
+				return;  // every snapshot: most maps have no holes
+			}
+			const Vector eye = player->EyePosition();
+			const float  at[3] = { eye.x, eye.y, eye.z };
+			dig_.pvs_points(source_to_mc(at, slot_), pvs_points_);
+			pvs_clusters_.assign(1, engine->GetClusterForOrigin(eye));  // the eye's cluster is in the pvs already
+			constexpr float OFFSETS[] = { -PVS_PROBE_OUTSIDE, -PVS_PROBE_INSIDE, PVS_PROBE_INSIDE, PVS_PROBE_OUTSIDE };
+			for (const Vector& centre : pvs_points_) {
+				add_pvs_point(centre);
+				for (int axis = 0; axis < 3; ++axis) {
+					for (const float offset : OFFSETS) {
+						Vector point = centre;
+						point[axis] += offset;
+						add_pvs_point(point);
+					}
+				}
+			}
+
+			const std::size_t holes = pvs_points_.size();
+			const std::size_t clusters = pvs_clusters_.size() - 1;
+			if (!hc_debug_dig_pvs.GetBool()) {
+				pvs_logged_holes_ = PVS_NOT_LOGGED;  // turned on again, it logs what it finds at once
+			} else if (holes != pvs_logged_holes_ || clusters != pvs_logged_clusters_) {
+				pvs_logged_holes_ = holes;
+				pvs_logged_clusters_ = clusters;
+				log_info("dig pvs: %zu holes near the player add %zu clusters", holes, clusters);
+			}
+		}
+
+		void HalfCraftServerSystem::add_pvs_point(const Vector& point)
+		{
+			// a solid leaf has no cluster (inside a brush, behind the map's walls), and one point a cluster is enough
+			const int cluster = engine->GetClusterForOrigin(point);
+			if (cluster < 0 || std::find(pvs_clusters_.begin(), pvs_clusters_.end(), cluster) != pvs_clusters_.end()) {
+				return;
+			}
+			pvs_clusters_.push_back(cluster);
+			engine->AddOriginToPVS(point);
+		}
+
 		void HalfCraftServerSystem::update_use(CBasePlayer* player)
 		{
 			// the client sends the mouse to source while a prop is carried (throw, drop)
@@ -270,6 +328,13 @@ namespace halfcraft
 	bool server_player_puppeted()
 	{
 		return g_last_puppet_move >= 0.0f && gpGlobals->curtime - g_last_puppet_move < PUPPET_GRACE_SECONDS;
+	}
+
+	void server_add_dig_pvs(CBasePlayer* player)
+	{
+		if (player != nullptr) {
+			g_server_system.add_dig_pvs(player);
+		}
 	}
 
 	bool box_dug(const Vector& mins, const Vector& maxs)

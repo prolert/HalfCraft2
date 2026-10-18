@@ -299,6 +299,7 @@ namespace halfcraft
 				const Vector& abs = player->GetAbsOrigin();
 				origin[0] = abs.x, origin[1] = abs.y, origin[2] = abs.z;
 			}
+			dig_update(source_to_mc(origin, s.slot), in_game);
 
 			// source moved the player itself (a teleport trigger, a level transition, loading a save).
 			if (s.loading) {

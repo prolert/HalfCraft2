@@ -651,7 +651,7 @@ index b0b2d867..326321ac 100644
  #pragma warning(disable:4244)
  #elif POSIX
 diff --git a/sp/src/game/server/player.cpp b/sp/src/game/server/player.cpp
-index 0538f90a..38f3c943 100644
+index 0538f90a..00a15e0f 100644
 --- a/sp/src/game/server/player.cpp
 +++ b/sp/src/game/server/player.cpp
 @@ -97,6 +97,8 @@ ConVar sv_bonus_challenge( "sv_bonus_challenge", "0", FCVAR_REPLICATED, "Set to
@@ -663,7 +663,17 @@ index 0538f90a..38f3c943 100644
  // memdbgon must be the last include file in a .cpp file!!!
  #include "tier0/memdbgon.h"
  
-@@ -1086,6 +1088,10 @@ int CBasePlayer::OnTakeDamage( const CTakeDamageInfo &inputInfo )
+@@ -676,6 +678,9 @@ void CBasePlayer::SetupVisibility( CBaseEntity *pViewEntity, unsigned char *pvs,
+ 	org = EyePosition();
+ 
+ 	engine->AddOriginToPVS( org );
++
++	// halfcraft: holes dug near the player show the rooms behind them: their npcs and props come to the client too
++	halfcraft::server_add_dig_pvs( this );
+ }
+ 
+ int	CBasePlayer::UpdateTransmitState()
+@@ -1086,6 +1091,10 @@ int CBasePlayer::OnTakeDamage( const CTakeDamageInfo &inputInfo )
  	if ( GetFlags() & FL_GODMODE )
  		return 0;
  
@@ -674,7 +684,7 @@ index 0538f90a..38f3c943 100644
  	if ( m_debugOverlays & OVERLAY_BUDDHA_MODE ) 
  	{
  		if ((m_iHealth - info.GetDamage()) <= 0)
-@@ -6640,7 +6646,11 @@ bool CBasePlayer::BumpWeapon( CBaseCombatWeapon *pWeapon )
+@@ -6640,7 +6649,11 @@ bool CBasePlayer::BumpWeapon( CBaseCombatWeapon *pWeapon )
  					pWeapon->m_iClip1 = pWeapon->GetMaxClip1();
  				}
  
@@ -687,7 +697,7 @@ index 0538f90a..38f3c943 100644
  			}
  #endif
  		}
-@@ -7339,7 +7349,9 @@ void CBasePlayer::Weapon_Equip( CBaseCombatWeapon *pWeapon )
+@@ -7339,7 +7352,9 @@ void CBasePlayer::Weapon_Equip( CBaseCombatWeapon *pWeapon )
  #endif//HL2_DLL
  
  	// should we switch to this item?
@@ -698,7 +708,7 @@ index 0538f90a..38f3c943 100644
  	{
  		Weapon_Switch( pWeapon );
  	}
-@@ -7835,6 +7847,9 @@ void CMovementSpeedMod::InputSpeedMod(inputdata_t &data)
+@@ -7835,6 +7850,9 @@ void CMovementSpeedMod::InputSpeedMod(inputdata_t &data)
  
  	if ( pPlayer )
  	{
@@ -708,7 +718,7 @@ index 0538f90a..38f3c943 100644
  		if ( data.value.Float() != 1.0f )
  		{
  			// Holster weapon immediately, to allow it to cleanup
-@@ -8237,6 +8252,8 @@ void CBasePlayer::VPhysicsShadowUpdate( IPhysicsObject *pPhysics )
+@@ -8237,6 +8255,8 @@ void CBasePlayer::VPhysicsShadowUpdate( IPhysicsObject *pPhysics )
  					{
  						newVelocity *= 0.5f;
  					}
