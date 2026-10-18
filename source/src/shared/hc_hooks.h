@@ -30,6 +30,14 @@ namespace halfcraft
 									// source takes hc_origin however far it is, if the player fits there
 	};
 
+	/// CGameMovement::HalfCraftMove (hc_movement.cpp): whether minecraft dug out every cell a source box reaches into
+	/// with some of its volume (not one it only touches). half-life's walls are still there for source's traces, so
+	/// minecraft's jump into a hole takes the player where a box that starts solid in the world is all in dug cells.
+	/// client.dll's are the cells it has (none without the shader dll), server.dll's the ones it cuts out of the
+	/// collision (server/hc_dig.h).
+	/// @param mins, maxs - the box, source units
+	bool box_dug(const Vector& mins, const Vector& maxs);
+
 #ifdef CLIENT_DLL
 	/// minecraft's lights that cast shadows (hc_block_lights.cpp), each six faces whose light walls stop
 	/// and six whose light they don't, all with a shadow depth texture: on top of the one for the

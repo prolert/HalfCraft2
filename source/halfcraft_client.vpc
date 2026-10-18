@@ -26,6 +26,7 @@ $Project
 		{
 			$File	"$HALFCRAFTDIR\src\shared\hc_hooks.h"
 			$File	"$HALFCRAFTDIR\src\shared\hc_bridge.h"
+			$File	"$HALFCRAFTDIR\src\shared\hc_dig_abi.h"
 			$File	"$HALFCRAFTDIR\src\shared\hc_movement.cpp"
 			$File	"$HALFCRAFTDIR\src\shared\hc_weapon_ids.h"
 			$File	"$HALFCRAFTDIR\src\shared\hc_bsp.h"
@@ -55,6 +56,8 @@ $Project
 			$File	"$HALFCRAFTDIR\src\client\hc_block_lights.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_debug.h"
 			$File	"$HALFCRAFTDIR\src\client\hc_debug.cpp"
+			$File	"$HALFCRAFTDIR\src\client\hc_dig.h"
+			$File	"$HALFCRAFTDIR\src\client\hc_dig.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_water.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_weapons.h"
 			$File	"$HALFCRAFTDIR\src\client\hc_weapons.cpp"
@@ -64,9 +67,11 @@ $Project
 				$File	"$HALFCRAFTPROTO\halfcraft_protocol.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_atomic.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_campaign.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_dug_cells.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_grid.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_link.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_log.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_module.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_prism.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_text.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_ticks.h"
@@ -74,6 +79,7 @@ $Project
 				$File	"$HALFCRAFTDIR\src\core\hc_chapters.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_link.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_log.cpp" \
+						"$HALFCRAFTDIR\src\core\hc_module.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_prism.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_ticks.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_units.cpp"

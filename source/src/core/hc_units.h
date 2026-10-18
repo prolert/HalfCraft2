@@ -18,6 +18,9 @@ namespace halfcraft
 {
 	inline constexpr double UNITS_PER_BLOCK = 40.0;
 	inline constexpr double MAP_SLOT_BLOCKS = 1024.0;
+	/// minecraft's sections further than this along x from a map's slot belong to another map (the slots are
+	/// MAP_SLOT_BLOCKS apart, a map spans +-410 blocks)
+	inline constexpr float KEEP_SLOT_BLOCKS = 600.0f;
 
 	struct McVec
 	{

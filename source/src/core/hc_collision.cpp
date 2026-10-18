@@ -39,11 +39,6 @@ namespace halfcraft
 			return a_lo[0] <= b_hi[0] && a_hi[0] >= b_lo[0] && a_lo[1] <= b_hi[1] && a_hi[1] >= b_lo[1] && a_lo[2] <= b_hi[2] && a_hi[2] >= b_lo[2];
 		}
 
-		std::uint64_t region_key(int x, int y, int z)
-		{
-			return (std::uint64_t(std::uint32_t(x) & 0x1FFFFF) << 42) | (std::uint64_t(std::uint32_t(y) & 0x1FFFFF) << 21) | (std::uint32_t(z) & 0x1FFFFF);
-		}
-
 		int floor_div(int v, int d)
 		{
 			return v >= 0 ? v / d : -((-v + d - 1) / d);
@@ -289,16 +284,24 @@ namespace halfcraft
 		const float                hi[3] = { lo[0] + REGION_SIZE + 1.0f, lo[1] + REGION_SIZE + 1.0f, lo[2] + REGION_SIZE + 1.0f };
 		std::vector<proto::ColTri> out;
 		out.reserve(solid.size());
+		std::vector<ColPrimitives::Tri> pieces;
 		for (const auto& tri : solid) {
 			float tlo[3], thi[3];
 			for (int k = 0; k < 3; ++k) {
 				tlo[k] = std::min({ tri.v[k], tri.v[3 + k], tri.v[6 + k] });
 				thi[k] = std::max({ tri.v[k], tri.v[3 + k], tri.v[6 + k] });
 			}
-			if (overlaps(tlo, thi, lo, hi) && finite(tri.v, 9)) {
+			if (!overlaps(tlo, thi, lo, hi) || !finite(tri.v, 9)) {
+				continue;
+			}
+			// only what lies in the region's box: a face of a brush gathered here can reach over a hole cut out of the same
+			// brush in a region next to it, which minecraft would collide with there
+			pieces.clear();
+			clip_triangle(tri, lo, hi, pieces);
+			for (const auto& piece : pieces) {
 				proto::ColTri t{};
-				std::memcpy(t.v, tri.v, sizeof(t.v));
-				t.flags = tri.flags;
+				std::memcpy(t.v, piece.v, sizeof(t.v));
+				t.flags = piece.flags;
 				out.push_back(t);
 			}
 		}

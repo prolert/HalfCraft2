@@ -79,7 +79,9 @@ static bool HalfCraftMinecraftGround(CBaseEntity* pGround)
 }
 
 // minecraft's jump lands its player where it fits: its box (minecraft's width, source's height for
-// the pose) is clear of everything the player collides with there, or a nudge away from it
+// the pose) is clear of everything the player collides with there, or a nudge away from it. a box in
+// cells minecraft dug out of half-life's walls is clear when only the world holds it there: source's
+// traces still have the walls (halfcraft::box_dug)
 static bool HalfCraftFits(CGameMovement* pMovement, const Vector& vecOrigin, bool bLow)
 {
 	const Vector vecMins(-HALFCRAFT_HALF_WIDTH, -HALFCRAFT_HALF_WIDTH, HALFCRAFT_LIFT);
@@ -88,7 +90,7 @@ static bool HalfCraftFits(CGameMovement* pMovement, const Vector& vecOrigin, boo
 		const Vector vecAt = vecOrigin + vecNudge;
 		trace_t      pm;
 		pMovement->TryTouchGround(vecAt, vecAt, vecMins, vecMaxs, pMovement->PlayerSolidMask(), COLLISION_GROUP_PLAYER_MOVEMENT, pm);
-		if (!pm.startsolid)
+		if (!pm.startsolid || (pm.DidHitWorld() && halfcraft::box_dug(vecAt + vecMins, vecAt + vecMaxs)))
 			return true;
 	}
 	return false;
@@ -110,14 +112,14 @@ static bool HalfCraftClear(CGameMovement* pMovement, const Vector& vecFrom, cons
 	return !pm.startsolid && pm.fraction == 1.0f;
 }
 
-// the box at the feet, without nudges
+// the box at the feet, without nudges (in dug cells as HalfCraftFits)
 static bool HalfCraftRoomAt(CGameMovement* pMovement, const Vector& vecFeet, bool bLow)
 {
 	const Vector vecMins(-HALFCRAFT_HALF_WIDTH, -HALFCRAFT_HALF_WIDTH, HALFCRAFT_LIFT);
 	const Vector vecMaxs(HALFCRAFT_HALF_WIDTH, HALFCRAFT_HALF_WIDTH, pMovement->GetPlayerMaxs(bLow).z);
 	trace_t      pm;
 	pMovement->TryTouchGround(vecFeet, vecFeet, vecMins, vecMaxs, pMovement->PlayerSolidMask(), COLLISION_GROUP_PLAYER_MOVEMENT, pm);
-	return !pm.startsolid;
+	return !pm.startsolid || (pm.DidHitWorld() && halfcraft::box_dug(vecFeet + vecMins, vecFeet + vecMaxs));
 }
 
 static bool HalfCraftUnderCeiling(CGameMovement* pMovement, const Vector& vecTarget, float flRoom, bool bLow, Vector& vecLanding)

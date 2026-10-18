@@ -20,6 +20,7 @@
 #include "server/hc_checkpoints.h"
 #include "server/hc_combat.h"
 #include "server/hc_debug_target.h"
+#include "server/hc_dig.h"
 #include "server/hc_hazards.h"
 #include "server/hc_held_blocks.h"
 #include "server/hc_mobs.h"
@@ -65,6 +66,7 @@ namespace halfcraft
 			bool Init() override
 			{
 				set_log_sink(console_sink);
+				world_.set_dig(&dig_);
 				link_ready_ = link_.attach();
 				if (link_ready_) {
 					streamer_ = std::make_unique<CollisionStreamer>(link_);
@@ -83,6 +85,7 @@ namespace halfcraft
 				slot_ = { map_slot(STRING(gpGlobals->mapname)), map_grid_z(STRING(gpGlobals->mapname)) };
 				world_.reset(slot_, STRING(gpGlobals->mapname));
 				solids_.reset(slot_);
+				dig_.reset(slot_);
 				held_blocks_.reset(slot_);
 				combat_.reset(slot_);
 				half_life_blasts_reset(slot_);
@@ -128,15 +131,23 @@ namespace halfcraft
 				world_.log_dig_material(player->EyePosition(), forward);
 			}
 
+			/// box_dug (shared/hc_hooks.h): the cells cut out of the collision, in this map's slot
+			bool box_dug(const Vector& mins, const Vector& maxs) const
+			{
+				return source_box_dug(mins.Base(), maxs.Base(), slot_, [this](int x, int y, int z) { return dig_.dug(x, y, z); });
+			}
+
 		private:
 			void update_hud(CBasePlayer* player, bool hide);
 			void update_use(CBasePlayer* player);
+			void outline_cut_pieces(CBasePlayer* player) const;
 
 			Link                               link_;
 			bool                               link_ready_ = false;
 			std::unique_ptr<CollisionStreamer> streamer_;
 			WorldCollision                     world_;
 			BlockSolids                        solids_;
+			DigState                           dig_;
 			HeldBlocks                         held_blocks_;
 			Weapons                            weapons_;
 			Combat                             combat_;
@@ -158,9 +169,13 @@ namespace halfcraft
 				return;
 			}
 			solids_.update();  // minecraft's blocks stop npcs, props and bullets
+			dig_.update(streamer_.get());  // and the cells it dug come out of the collision it gets
 
 			CBasePlayer* player = UTIL_GetLocalPlayer();
 			const bool   puppeted = player && server_player_puppeted();
+			if (dig_.outlined() && player) {
+				outline_cut_pieces(player);  // hc_debug_dig
+			}
 			if (player) {
 				update_hud(player, minecraft_owns_health());
 				update_use(player);
@@ -206,6 +221,18 @@ namespace halfcraft
 			streamer_->update(centre, world_);
 		}
 
+		void HalfCraftServerSystem::outline_cut_pieces(CBasePlayer* player) const
+		{
+			constexpr double    NEAR_BLOCKS = 16.0;
+			const Vector&       origin = player->GetAbsOrigin();
+			const float         feet[3] = { origin.x, origin.y, origin.z };
+			std::vector<DigBox> pieces;
+			world_.cut_pieces_near(source_to_mc(feet, slot_), NEAR_BLOCKS, pieces);
+			for (const DigBox& piece : pieces) {
+				outline_mc_box(piece.lo, piece.hi, slot_, 0, 160, 255);
+			}
+		}
+
 		void HalfCraftServerSystem::update_use(CBasePlayer* player)
 		{
 			// the client sends the mouse to source while a prop is carried (throw, drop)
@@ -243,6 +270,11 @@ namespace halfcraft
 	bool server_player_puppeted()
 	{
 		return g_last_puppet_move >= 0.0f && gpGlobals->curtime - g_last_puppet_move < PUPPET_GRACE_SECONDS;
+	}
+
+	bool box_dug(const Vector& mins, const Vector& maxs)
+	{
+		return g_server_system.box_dug(mins, maxs);
 	}
 }
 

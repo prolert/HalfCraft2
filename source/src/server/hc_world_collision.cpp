@@ -21,6 +21,7 @@
 
 #include "core/hc_log.h"
 #include "server/hc_block_solids.h"
+#include "server/hc_dig.h"
 #include "server/hc_world_collision.h"
 #include "shared/hc_bsp.h"
 
@@ -318,6 +319,8 @@ namespace halfcraft
 		GatheredFilter     filter;
 		std::vector<Block> blocks;
 		long long          voxels = 0, phantoms = 0;
+		long long          in_holes = 0;  // voxels in dug cells: source still has its walls there
+		const bool         holes = dig_ && dig_->count() > 0;
 		for (int rx = px - radius; rx <= px + radius; ++rx) {
 			for (int ry = py - 1; ry <= py + 1; ++ry) {
 				for (int rz = pz - radius; rz <= pz + radius; ++rz) {
@@ -334,6 +337,10 @@ namespace halfcraft
 							const std::uint64_t row = solid[y * G + z];
 							for (int x = 0; x < G && row >> x; ++x) {
 								if (!(row >> x & 1)) {
+									continue;
+								}
+								if (holes && dig_->dug(rx * R + x / 8, ry * R + y / 8, rz * R + z / 8)) {
+									++in_holes;
 									continue;
 								}
 								++voxels;
@@ -378,6 +385,9 @@ namespace halfcraft
 		}
 		std::sort(blocks.begin(), blocks.end(), [](const Block& a, const Block& b) { return a.phantoms > b.phantoms; });
 		log_info("hc_debug_voxels: %lld voxels, %lld with nothing of source's near them, in %zu blocks", voxels, phantoms, blocks.size());
+		if (holes) {
+			log_info("hc_debug_voxels: %lld voxels inside dug cells (brushes leave none; props and displacements aren't cut)", in_holes);
+		}
 		for (std::size_t i = 0; i < blocks.size() && i < 20; ++i) {
 			const Block& b = blocks[i];
 			float        src[3];
@@ -395,6 +405,7 @@ namespace halfcraft
 		sky_brushes_ = map_name ? read_sky_brushes(map_name) : std::vector<bool>();
 		brush_dig_.clear();
 		bsp_ = map_name ? read_void_tree(map_name) : nullptr;
+		cut_pieces_.clear();
 	}
 
 	VoidQuery WorldCollision::void_query() const
@@ -426,19 +437,35 @@ namespace halfcraft
 	{
 		Vector mins, maxs;
 		to_source_box(lo, hi, mins, maxs);
-		add_brushes(mins, maxs, out);
+		// the region it's for (the streamer gathers half a block around one): its cut pieces are these from now on
+		int region[3];
+		for (int k = 0; k < 3; ++k) {
+			region[k] = static_cast<int>(std::floor((lo[k] + 0.5f) / COLLISION_REGION_SIZE));
+		}
+		const std::uint64_t key = region_key(region[0], region[1], region[2]);
+		std::vector<DigBox> cut;
+		add_brushes(mins, maxs, out, cut);
+		if (cut.empty()) {
+			cut_pieces_.erase(key);
+		} else {
+			cut_pieces_[key] = std::move(cut);
+		}
 		add_displacements(mins, maxs, out);
 		add_static_props(mins, maxs, out);
 		add_entities(mins, maxs, out);
 	}
 
-	void WorldCollision::add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out)
+	/// @param cut - the bounds of the pieces brushes with dug cells in them were cut into, appended
+	void WorldCollision::add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out, std::vector<DigBox>& cut)
 	{
 		CUtlVector<int> brushes;
 		enginetrace->GetBrushesInAABB(mins, maxs, &brushes, PLAYER_SOLID_BRUSHES);
-		CUtlVector<Vector4D>              planes;
-		std::vector<std::array<float, 4>> brush;
-		const float                       box_mins[3] = { mins.x, mins.y, mins.z }, box_maxs[3] = { maxs.x, maxs.y, maxs.z };
+		CUtlVector<Vector4D>               planes;
+		std::vector<std::array<float, 4>>  brush;
+		const float                        box_mins[3] = { mins.x, mins.y, mins.z }, box_maxs[3] = { maxs.x, maxs.y, maxs.z };
+		const bool                         digging = dig_ && dig_->count() > 0;
+		std::vector<DigBox>                boxes;
+		std::vector<ColPrimitives::Convex> pieces;
 		for (int i = 0; i < brushes.Count(); ++i) {
 			planes.RemoveAll();
 			int contents = 0;
@@ -461,7 +488,40 @@ namespace halfcraft
 					cvx.plane_flags.push_back(dig_flags(dig.sides.size() == cvx.planes.size() ? dig.sides[p] : dig.material));
 				}
 			}
-			out.convexes.push_back(std::move(cvx));
+			// the cells minecraft dug in it (all but the sky's: player clips and moveable brushes too) come out of it
+			boxes.clear();
+			if (digging && !(cvx.flags & PRIM_SKY)) {
+				dig_->boxes_in(cvx.lo, cvx.hi, boxes);
+			}
+			if (boxes.empty()) {
+				out.convexes.push_back(std::move(cvx));
+				continue;
+			}
+			// the faces of the hole's walls dig as the brush does; a clip's or a moveable brush's don't dig
+			const std::uint32_t cut_flags = diggable(brushes[i], contents) ? dig_flags(brush_dig(brushes[i], planes).material) : 0u;
+			pieces.clear();
+			subtract_boxes(cvx, boxes, cut_flags, pieces);
+			for (auto& piece : pieces) {
+				cut.push_back({ { piece.lo[0], piece.lo[1], piece.lo[2] }, { piece.hi[0], piece.hi[1], piece.hi[2] } });
+				out.convexes.push_back(std::move(piece));
+			}
+		}
+	}
+
+	void WorldCollision::cut_pieces_near(const McVec& p, double radius, std::vector<DigBox>& out) const
+	{
+		out.clear();
+		const double at[3] = { p.x, p.y, p.z };
+		for (const auto& region : cut_pieces_) {
+			for (const DigBox& piece : region.second) {
+				bool near = true;
+				for (int k = 0; k < 3 && near; ++k) {
+					near = piece.lo[k] <= at[k] + radius && piece.hi[k] >= at[k] - radius;
+				}
+				if (near) {
+					out.push_back(piece);
+				}
+			}
 		}
 	}
 

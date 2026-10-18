@@ -11,4 +11,9 @@ namespace halfcraft
 		HMODULE handle = ::GetModuleHandleA(module);
 		return handle ? reinterpret_cast<void*>(::GetProcAddress(handle, name)) : nullptr;
 	}
+
+	bool module_loaded(const char* module)
+	{
+		return ::GetModuleHandleA(module) != nullptr;
+	}
 }

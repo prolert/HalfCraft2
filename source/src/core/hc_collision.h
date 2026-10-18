@@ -27,6 +27,13 @@
 
 namespace halfcraft
 {
+	/// a region's key in a map of regions (the streamer's, WorldCollision's cut pieces): 21 bits an axis, which every
+	/// map's slot fits in (hc_units.h)
+	inline std::uint64_t region_key(int x, int y, int z)
+	{
+		return (std::uint64_t(std::uint32_t(x) & 0x1FFFFF) << 42) | (std::uint64_t(std::uint32_t(y) & 0x1FFFFF) << 21) | (std::uint32_t(z) & 0x1FFFFF);
+	}
+
 	/// what the worker finds the void behind the map's walls with (kColVoid): the map's bsp tree, shared with the
 	/// jobs that hold it (a map load swaps it on the main thread), and where the map sits. no tree: no void.
 	struct VoidQuery

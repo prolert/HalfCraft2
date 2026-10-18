@@ -4,6 +4,10 @@
 // exports these functions and server.dll looks them up by name.
 //   solids - minecraft's solid blocks, read off the render ring by the client; the server turns them
 //            into collision for npcs, physics and bullets
+//   dug    - the cells minecraft dug out of half-life's walls, read off the render ring likewise; the
+//            server cuts them out of the world brushes in the collision it streams to minecraft. only
+//            with the shader dll (shared/hc_dig_abi.h): without it half-life draws its walls whole,
+//            and they stay solid for minecraft too
 //   hurts  - half-life's hits on the player, caught by the server; the client puts them on the input
 //            ring it owns
 //   heals  - half-life's health kits, chargers and suit batteries on the player, seen by the server;
@@ -42,6 +46,22 @@ namespace halfcraft
 	using SolidsSinceFn = int (*)(std::uint32_t since, SolidSection* out, int max, std::uint32_t* now);
 
 	inline constexpr char HC_SOLIDS_EXPORT[] = "HalfCraft_SolidsSince";
+
+	/// one 16x16x16 section's cells dug out of half-life's walls (plain layout: it crosses a dll boundary).
+	struct DugSection
+	{
+		std::int32_t  sx, sy, sz;  // section coords (minecraft)
+		std::uint32_t count;       // dug cells; 0: none (its holes are gone)
+		std::uint8_t  bits[512];   // bit (x + 16 z + 256 y), minecraft axes
+	};
+
+	/// sections whose dug cells changed after version since (as SolidsSinceFn).
+	/// @param out - up to max of them
+	/// @param now - the current version (pass it back as since next time)
+	/// @return how many changed (may exceed max: call again with room for all)
+	using DugSinceFn = int (*)(std::uint32_t since, DugSection* out, int max, std::uint32_t* now);
+
+	inline constexpr char HC_DUG_EXPORT[] = "HalfCraft_DugSince";
 
 	/// server.dll -> client.dll: half-life hit the player; goes to minecraft as proto::kInHurt
 	/// (client.dll owns the input ring).

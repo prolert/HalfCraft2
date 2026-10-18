@@ -40,7 +40,6 @@ namespace halfcraft
 		constexpr int   BUILDS_PER_FRAME = 8;
 		constexpr auto  BUILD_BUDGET = std::chrono::microseconds(4000);
 		constexpr float LIGHT_PROBE_BLOCKS = 0.3f;  // light is sampled this far out in front of a face
-		constexpr float KEEP_SLOT_BLOCKS = 600.0f;  // sections further than this from the map's slot are dropped
 
 		// ---- one section ----------------------------------------------------------------------
 		class Section final : public CDefaultClientRenderable

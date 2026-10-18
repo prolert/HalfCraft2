@@ -19,6 +19,7 @@
 #include "client/hc_block_lights.h"
 #include "client/hc_blocks.h"
 #include "client/hc_client.h"
+#include "client/hc_dig.h"
 #include "client/hc_jumps.h"
 #include "shared/hc_floors.h"
 #include "client/hc_things.h"
@@ -181,6 +182,7 @@ namespace halfcraft
 			void Shutdown() override
 			{
 				blocks_shutdown();
+				dig_shutdown();
 				auto& s = client_session();
 				if (s.link_ready) {
 					s.link.write_host_state(proto::HostState{});
@@ -270,6 +272,7 @@ namespace halfcraft
 				s.ticks.reset();
 			}
 			blocks_set_slot(s.slot);
+			dig_set_slot(s.slot);  // in step with the blocks, before this frame's messages come in
 
 			// half-life's hits and heals on the player go to minecraft's health
 			{
@@ -284,6 +287,7 @@ namespace halfcraft
 			s.link.drain_render(
 				[](std::uint32_t type, const std::uint8_t* payload, std::uint32_t bytes) {
 					blocks_on_message(type, payload, bytes);
+					dig_on_message(type, payload, bytes);
 					things_on_message(type, payload, bytes);
 					block_lights_on_message(type, payload, bytes);
 				},
@@ -402,6 +406,9 @@ namespace halfcraft
 			host.flags = (in_game ? proto::kHostInGame : 0u) | (menu ? proto::kHostMenuOpen : 0u) | (s.loading ? proto::kHostLoading : 0u);
 			if (takeover && takeover != TAKEOVER_OBSERVING && alive && !s.loading) {
 				host.flags |= proto::kHostTakeover;  // minecraft's player stays where source's is
+			}
+			if (!dig_enabled()) {
+				host.flags |= proto::kHostDigOff;  // hc_dig 0, or no shader dll to leave the holes undrawn
 			}
 			float seat = 0.0f;
 			s.seated = takeover == TAKEOVER_VEHICLE && seat_yaw(player, seat);

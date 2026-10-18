@@ -6,7 +6,9 @@
 //   world brushes      enginetrace brush planes        -> convexes (exact, player clips included; the
 //                                                         sky's flagged PRIM_SKY, from the map's .bsp;
 //                                                         the ones minecraft may dig PRIM_DIGGABLE, each
-//                                                         side with its dig material, traced once per brush)
+//                                                         side with its dig material, traced once per brush;
+//                                                         all but the sky's with the cells minecraft dug
+//                                                         cut out, server/hc_dig.h)
 //   displacements      enginetrace displacement collide -> triangles
 //   static props       their .phy hulls                -> convexes
 //   solid entities     doors, lifts, props, crates     -> convexes, re-sent while they move
@@ -20,6 +22,7 @@
 #include <vector>
 
 #include "core/hc_collision.h"
+#include "core/hc_dig_clip.h"
 #include "core/hc_dig_material.h"
 
 class CBaseEntity;
@@ -27,12 +30,18 @@ struct model_t;
 
 namespace halfcraft
 {
+	class DigState;
+
 	class WorldCollision final : public CollisionSource
 	{
 	public:
 		/// a new map: where it sits in the minecraft world, and nothing cached from the last one.
 		/// @param map_name - its name ("d1_canals_01"), to read its sky brushes and bsp tree from; nullptr: none
 		void reset(MapSlot slot, const char* map_name);
+
+		/// the cells minecraft dug, which gather cuts out of the world's brushes from now on (every map's: reset keeps it).
+		/// @param dig - nullptr: none
+		void set_dig(const DigState* dig) { dig_ = dig; }
 
 		void gather(const float lo[3], const float hi[3], ColPrimitives& out) override;
 		/// the map's bsp tree (none when it didn't read) and slot
@@ -55,6 +64,12 @@ namespace halfcraft
 		/// @param eye, forward - the ray, source coords
 		void log_dig_material(const Vector& eye, const Vector& forward);
 
+		/// hc_debug_dig: the pieces the world's brushes were cut into around dug cells, as last gathered, that come within
+		/// radius of a point along each axis.
+		/// @param p - minecraft coords
+		/// @param out - replaced by their bounds, minecraft coords
+		void cut_pieces_near(const McVec& p, double radius, std::vector<DigBox>& out) const;
+
 	private:
 		using Hull = std::vector<Vector>;  // a convex piece as triangles (3 corners each), model space
 
@@ -68,7 +83,7 @@ namespace halfcraft
 		const std::vector<Hull>& model_hulls(const model_t* model);
 		void                     add_hulls(const std::vector<Hull>& hulls, const matrix3x4_t& to_world, std::uint32_t flags, ColPrimitives& out) const;
 		void                     add_box(const Vector& mins, const Vector& maxs, const matrix3x4_t& to_world, ColPrimitives& out) const;
-		void                     add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out);
+		void                     add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out, std::vector<DigBox>& cut);
 		void                     add_displacements(const Vector& mins, const Vector& maxs, ColPrimitives& out) const;
 		void                     add_static_props(const Vector& mins, const Vector& maxs, ColPrimitives& out);
 		void                     add_entities(const Vector& mins, const Vector& maxs, ColPrimitives& out);
@@ -103,5 +118,8 @@ namespace halfcraft
 		std::unordered_map<const model_t*, std::vector<Hull>> hulls_;
 		std::unordered_map<int, Mover>                        movers_;  // by entity serial-qualified index
 		int                                                   frame_ = 0;
+		const DigState*                                       dig_ = nullptr;
+		// by region (region_key): the bounds of the pieces brushes were cut into there, as last gathered (hc_debug_dig)
+		std::unordered_map<std::uint64_t, std::vector<DigBox>> cut_pieces_;
 	};
 }

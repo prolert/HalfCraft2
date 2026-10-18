@@ -26,7 +26,6 @@ extern ConVar physcannon_tracelength;  // how far the gravity gun grabs and punt
 namespace
 {
 	constexpr int   SECTION_BLOCKS = 16;
-	constexpr float KEEP_SLOT_BLOCKS = 600.0f;  // sections further than this from the map's slot belong to another map
 	constexpr float BULLET_DEPTH = 1.0f;        // units behind the face a bullet hit: inside its block for sure
 	constexpr float PUNT_SPEED = 1200.0f;       // units a second a block the gravity gun punts out of a wall flies at
 
