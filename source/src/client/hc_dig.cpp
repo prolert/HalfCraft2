@@ -52,16 +52,20 @@ namespace halfcraft
 		bool g_holes_near = false;  // dig_holes_near's, as dig_update last found it
 
 		using SectionKey = std::tuple<int, int, int>;  // a section, minecraft section coords
+		using StoredSection = std::pair<DugSection, std::uint32_t>;  // a section's cells, with the version it last changed at
 
 		struct DigStore
 		{
 			std::mutex lock;
 			// every section a cell was dug in, with the version it last changed at (emptied ones stay, so server.dll
 			// hears they're gone)
-			std::map<SectionKey, std::pair<DugSection, std::uint32_t>> sections;
-			std::uint32_t                                              version = 0;
-			MapSlot                                                    slot;
+			std::map<SectionKey, StoredSection> sections;
+			std::uint32_t                       version = 0;
+			MapSlot                             slot;
+			DugPending<SectionKey>              pending;  // what kRenClearAll left as it was
 		};
+
+		constexpr double GRACE_SECONDS = DugPending<SectionKey>::GRACE_SECONDS;
 
 		DigStore& store()
 		{
@@ -95,15 +99,12 @@ namespace halfcraft
 			return instance;
 		}
 
-		/// one section's mask (from minecraft, or hc_debug_dig_cell). the one it has already changes nothing (no new
-		/// version): kRenDug comes with every kRenSection.
+		/// one section's mask into the store (its lock held). the one it has already changes nothing (no new version):
+		/// kRenDug comes with every kRenSection.
 		/// @param bits - nullptr: nothing dug there
-		void set_dug(std::int32_t sx, std::int32_t sy, std::int32_t sz, std::uint32_t count, const std::uint8_t* bits)
+		void replace_section(DigStore& d, const SectionKey& key, std::uint32_t count, const std::uint8_t* bits)
 		{
-			auto&                       d = store();
-			std::lock_guard<std::mutex> lock(d.lock);
-			const SectionKey            key{ sx, sy, sz };
-			const auto                  it = d.sections.find(key);
+			const auto it = d.sections.find(key);
 			if (!bits) {
 				if (it == d.sections.end() || it->second.first.count == 0) {
 					return;  // nothing was dug there, and nothing is
@@ -111,17 +112,43 @@ namespace halfcraft
 			} else if (it != d.sections.end() && it->second.first.count == count && std::memcmp(it->second.first.bits, bits, sizeof(it->second.first.bits)) == 0) {
 				return;
 			}
-			auto&       entry = it != d.sections.end() ? it->second : d.sections[key];
-			DugSection& section = entry.first;
-			section.sx = sx;
-			section.sy = sy;
-			section.sz = sz;
+			StoredSection& entry = it != d.sections.end() ? it->second : d.sections[key];
+			DugSection&    section = entry.first;
+			section.sx = std::get<0>(key);
+			section.sy = std::get<1>(key);
+			section.sz = std::get<2>(key);
 			section.count = bits ? count : 0;
 			if (bits) {
 				std::memcpy(section.bits, bits, sizeof(section.bits));
 			} else {
 				std::memset(section.bits, 0, sizeof(section.bits));
 			}
+			entry.second = ++d.version;
+		}
+
+		/// one section's mask (from minecraft, or hc_debug_dig_cell). a section kRenClearAll left pending isn't any more,
+		/// the mask it had or not.
+		/// @param bits - nullptr: nothing dug there
+		void set_dug(std::int32_t sx, std::int32_t sy, std::int32_t sz, std::uint32_t count, const std::uint8_t* bits)
+		{
+			bool all_again = false;  // the last pending section came again
+			{
+				auto&                       d = store();
+				std::lock_guard<std::mutex> lock(d.lock);
+				const SectionKey            key{ sx, sy, sz };
+				all_again = d.pending.settle(key) && d.pending.size() == 0;
+				replace_section(d, key, count, bits);
+			}
+			if (all_again) {
+				log_info("dig: minecraft sent every section with cells dug again");
+			}
+		}
+
+		/// a section emptied (the store's lock held), at a new version: server.dll hears it's gone
+		void empty_section(DigStore& d, StoredSection& entry)
+		{
+			entry.first.count = 0;
+			std::memset(entry.first.bits, 0, sizeof(entry.first.bits));
 			entry.second = ++d.version;
 		}
 
@@ -132,12 +159,53 @@ namespace halfcraft
 			auto&                       d = store();
 			std::lock_guard<std::mutex> lock(d.lock);
 			for (auto& entry : d.sections) {
-				DugSection& section = entry.second.first;
-				if (section.count > 0 && pick(entry.first)) {
-					section.count = 0;
-					std::memset(section.bits, 0, sizeof(section.bits));
-					entry.second.second = ++d.version;
+				if (entry.second.first.count > 0 && pick(entry.first)) {
+					empty_section(d, entry.second);
 				}
+			}
+		}
+
+		/// empties a pending section (the store's lock held), unless something emptied it already
+		void empty_pending(DigStore& d, const SectionKey& key)
+		{
+			const auto it = d.sections.find(key);
+			if (it != d.sections.end() && it->second.first.count > 0) {
+				empty_section(d, it->second);
+			}
+		}
+
+		/// kRenClearAll at now: minecraft sends every section again, the dug ones first (WorldExporter.resendEverything).
+		/// the sections with cells dug stay as they are until their kRenDug comes, GRACE_SECONDS at most (DugPending)
+		void keep_until_sent_again(double now)
+		{
+			std::size_t kept = 0;
+			{
+				auto&                       d = store();
+				std::lock_guard<std::mutex> lock(d.lock);
+				d.pending.start(now);
+				for (const auto& entry : d.sections) {
+					if (entry.second.first.count > 0) {
+						d.pending.add(entry.first);
+					}
+				}
+				kept = d.pending.size();
+			}
+			if (kept > 0) {
+				log_info("dig: minecraft sends everything again: %zu section(s) with cells dug stay as they are until it sends them, %.0f s at most", kept, GRACE_SECONDS);
+			}
+		}
+
+		/// the sections kRenClearAll left pending that minecraft hasn't sent again within the grace: emptied now
+		void expire_pending(double now)
+		{
+			std::size_t emptied = 0;
+			{
+				auto&                       d = store();
+				std::lock_guard<std::mutex> lock(d.lock);
+				emptied = d.pending.expire(now, [&d](const SectionKey& key) { empty_pending(d, key); });
+			}
+			if (emptied > 0) {
+				log_info("dig: %zu section(s) with cells dug not sent again within %.0f s of minecraft sending everything again: emptied", emptied, GRACE_SECONDS);
 			}
 		}
 
@@ -345,7 +413,9 @@ namespace halfcraft
 			const bool has_bits = header.count > 0 && sizeof(header) + sizeof(DugSection::bits) <= bytes;
 			set_dug(header.sx, header.sy, header.sz, has_bits ? header.count : 0, has_bits ? payload + sizeof(header) : nullptr);
 		} else if (type == proto::kRenClearAll) {
-			empty_sections([](const SectionKey&) { return true; });
+			// not emptied at once: minecraft sends the dug ones again first. Plat_FloatTime, not game time: the grace
+			// waits on minecraft, which doesn't stop for a pause, a level load or host_timescale
+			keep_until_sent_again(Plat_FloatTime());
 		}
 	}
 
@@ -362,6 +432,12 @@ namespace halfcraft
 		// another map: what minecraft dug around the old one isn't anywhere near this one
 		const float centre = static_cast<float>(slot.x_blocks());
 		empty_sections([centre](const SectionKey& key) { return std::fabs(static_cast<float>(std::get<0>(key) * SECTION_BLOCKS) - centre) > KEEP_SLOT_BLOCKS; });
+		// and the grace a kRenClearAll gave ends: it kept the holes around a player who has left. the ones still
+		// pending in this map's slot are emptied too (minecraft sends them again as it loads their chunks), so none stays
+		// dug that minecraft may not have any more
+		auto&                       d = store();
+		std::lock_guard<std::mutex> lock(d.lock);
+		d.pending.end([&d](const SectionKey& key) { empty_pending(d, key); });
 	}
 
 	bool dig_shader_ready()
@@ -386,6 +462,7 @@ namespace halfcraft
 
 	void dig_update(const McVec& player, bool in_game)
 	{
+		expire_pending(Plat_FloatTime());  // after this frame's messages: a section they brought again stays
 		mask_update(player);
 		// hc_dig 0 leaves the holes cut out (it only stops new ones): they're seen through all the same. the ones
 		// outside the mask are drawn closed: nothing to see through there
@@ -409,6 +486,7 @@ namespace halfcraft
 		auto&                       d = store();
 		std::lock_guard<std::mutex> lock(d.lock);
 		d.sections.clear();
+		d.pending.drop();
 	}
 
 	const DigMaskState* dig_mask_state()

@@ -928,6 +928,59 @@ namespace
 		CHECK(!source_box_dug(up_lo, up_hi, slot, dug_cell));
 	}
 
+	void test_dug_pending()
+	{
+		using Key = std::array<int, 3>;
+		DugPending<Key>  pending;
+		std::vector<Key> emptied;
+		const auto       empty = [&emptied](const Key& key) { emptied.push_back(key); };
+		CHECK(pending.expire(100.0, empty) == 0 && emptied.empty());  // nothing pending: nothing to empty, whenever
+
+		// a kRenClearAll at 10 s finds two sections with cells dug
+		pending.start(10.0);
+		pending.add({ 1, 2, 3 });
+		pending.add({ 4, 5, 6 });
+		CHECK(pending.size() == 2 && pending.pending({ 1, 2, 3 }) && pending.pending({ 4, 5, 6 }) && !pending.pending({ 7, 8, 9 }));
+		CHECK(pending.expire(11.999, empty) == 0 && emptied.empty() && pending.size() == 2);  // within the grace
+		// one comes again (its kRenDug): no longer pending, once
+		CHECK(pending.settle({ 1, 2, 3 }));
+		CHECK(!pending.settle({ 1, 2, 3 }));
+		CHECK(!pending.settle({ 7, 8, 9 }));  // never was
+		CHECK(!pending.pending({ 1, 2, 3 }) && pending.size() == 1);
+		// the grace ends (10 + 2 s): the other is emptied, and only once
+		CHECK(pending.expire(12.0, empty) == 1);
+		CHECK(emptied.size() == 1 && emptied[0] == (Key{ 4, 5, 6 }));
+		CHECK(pending.size() == 0 && pending.expire(20.0, empty) == 0 && emptied.size() == 1);
+
+		// every section comes again: nothing emptied when the grace ends
+		pending.start(21.0);
+		pending.add({ 1, 1, 1 });
+		CHECK(pending.settle({ 1, 1, 1 }) && pending.size() == 0);
+		CHECK(pending.expire(30.0, empty) == 0 && emptied.size() == 1);
+
+		// another kRenClearAll during the grace starts it over, with the sections it finds dug (the caller adds them)
+		pending.start(30.0);
+		pending.add({ 1, 1, 1 });
+		pending.add({ 2, 2, 2 });
+		pending.start(31.5);
+		pending.add({ 2, 2, 2 });
+		CHECK(!pending.pending({ 1, 1, 1 }) && pending.pending({ 2, 2, 2 }));
+		CHECK(pending.expire(33.0, empty) == 0);  // 30 + 2 s is past, 31.5 + 2 s isn't
+		CHECK(pending.expire(33.5, empty) == 1 && emptied.size() == 2 && emptied[1] == (Key{ 2, 2, 2 }));
+
+		// another map ends the grace at once
+		pending.start(40.0);
+		pending.add({ 3, 3, 3 });
+		CHECK(pending.end(empty) == 1 && emptied.size() == 3 && emptied[2] == (Key{ 3, 3, 3 }) && pending.size() == 0);
+		CHECK(pending.end(empty) == 0 && emptied.size() == 3);
+
+		// shutdown drops them, emptying none
+		pending.start(50.0);
+		pending.add({ 5, 5, 5 });
+		pending.drop();
+		CHECK(pending.size() == 0 && pending.expire(60.0, empty) == 0 && emptied.size() == 3);
+	}
+
 	void test_triangle_clip()
 	{
 		const float                     lo[3] = { 0, 0, 0 }, hi[3] = { 1, 1, 1 };
@@ -983,6 +1036,7 @@ int run_tests()
 	test_dig_mask_has_section();
 	test_dig_mask_needs_rebuild();
 	test_dug_cells();
+	test_dug_pending();
 	test_triangle_clip();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);

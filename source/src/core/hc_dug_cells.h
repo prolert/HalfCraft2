@@ -2,7 +2,8 @@
 
 // the cells minecraft dug out of half-life's walls, as minecraft sends them (proto::kRenDug): a 512-byte mask for each
 // 16x16x16 section, bit x + 16z + 256y of it. server.dll keeps them here (server/hc_dig.h) to cut them out of the
-// collision it streams. pure code, no engine and no link.
+// collision it streams; client.dll keeps the sections a kRenClearAll leaves as they were in DugPending until minecraft
+// sends them again. pure code, no engine and no link.
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -249,4 +251,59 @@ namespace halfcraft
 		}
 		return true;
 	}
+
+	/// the sections with cells dug that a kRenClearAll found (client.dll's). minecraft sends every section again after it,
+	/// the dug ones first; until a section's kRenDug comes it stays as it was, for a grace period at most. emptied at once,
+	/// server.dll would stream the walls around a player in a tunnel uncut for a moment, and the dig mask and r_novis would
+	/// flash. the ones still pending when the grace ends are emptied then: minecraft has nothing dug there any more, or
+	/// doesn't hold their chunks.
+	/// @tparam Key - a section's key, ordered
+	template <class Key>
+	class DugPending
+	{
+	public:
+		static constexpr double GRACE_SECONDS = 2.0;
+
+		/// a kRenClearAll at now: what was pending isn't any more, and the sections add() marks are pending until
+		/// now + GRACE_SECONDS
+		void start(double now)
+		{
+			keys_.clear();
+			until_ = now + GRACE_SECONDS;
+		}
+		/// a section with cells dug is pending
+		void add(const Key& key) { keys_.insert(key); }
+		/// a section came again (its kRenDug, whatever it says): it isn't pending any more
+		/// @return whether it was
+		bool settle(const Key& key) { return keys_.erase(key) != 0; }
+		/// at now, once the grace has ended: empty(key) for each section still pending, which then isn't
+		/// @return how many it emptied
+		template <class Empty>
+		std::size_t expire(double now, Empty&& empty)
+		{
+			return now < until_ ? 0 : end(empty);
+		}
+		/// the grace ends now (another map): empty(key) for each section still pending, which then isn't
+		/// @return how many it emptied
+		template <class Empty>
+		std::size_t end(Empty&& empty)
+		{
+			const std::size_t emptied = keys_.size();
+			for (const Key& key : keys_) {
+				empty(key);
+			}
+			keys_.clear();
+			return emptied;
+		}
+		/// no section is pending any more, none emptied (shutdown, which drops them all)
+		void drop() { keys_.clear(); }
+		/// whether a section is pending
+		bool pending(const Key& key) const { return keys_.count(key) != 0; }
+		/// how many sections are pending
+		std::size_t size() const { return keys_.size(); }
+
+	private:
+		std::set<Key> keys_;
+		double        until_ = 0.0;
+	};
 }
