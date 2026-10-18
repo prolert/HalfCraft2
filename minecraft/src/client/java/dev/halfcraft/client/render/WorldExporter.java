@@ -7,10 +7,14 @@ import dev.halfcraft.client.HostDigClient;
 import dev.halfcraft.link.Proto;
 import dev.halfcraft.link.HostLink;
 import dev.halfcraft.link.ProtoStructs;
+import dev.halfcraft.world.DugBits;
 import dev.halfcraft.world.HeldBlocks;
 import dev.halfcraft.world.HostClip;
 import dev.halfcraft.world.HostCollision;
+import dev.halfcraft.world.HostDig;
+import dev.halfcraft.world.HostTri;
 import it.unimi.dsi.fastutil.longs.Long2FloatOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.nio.ByteBuffer;
@@ -29,6 +33,7 @@ import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
+import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
@@ -45,6 +50,7 @@ import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.server.level.BlockDestructionProgress;
 import net.minecraft.world.level.CardinalLighting;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
@@ -57,6 +63,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Ships what Minecraft would draw in the world to Half-Life, which draws it in its own frame (so it is
@@ -74,6 +81,9 @@ public final class WorldExporter {
 	private static final LongOpenHashSet SOLID = new LongOpenHashSet(); // sections Half-Life holds NPC collision for
 	private static final long[] SOLID_BITS = new long[64]; // 4096 blocks: bit x + 16z + 256y
 	private static final long[] TAKE_BITS = new long[64]; // the solid ones Half-Life's gravity gun may tear out (HeldBlocks.takeable)
+	private static final LongOpenHashSet DUG = new LongOpenHashSet(); // sections Half-Life holds dug cells for
+	// section -> a cell its hole walls were left out at, Half-Life not having sent the cell's region yet
+	private static final Long2LongOpenHashMap DUG_WAITING = new Long2LongOpenHashMap();
 	private static final ByteBuffer LIGHTS = ByteBuffer.allocate(16 * 16 * 16 * 8).order(ByteOrder.LITTLE_ENDIAN);
 	private static int sentGeneration = Integer.MIN_VALUE;
 	private static volatile boolean resendWanted; // Half-Life dropped render messages it couldn't read
@@ -83,6 +93,8 @@ public final class WorldExporter {
 	private static ModelBlockRenderer blockRenderer;
 	private static FluidRenderer fluidRenderer;
 	private static final MeshBuilder MESH = new MeshBuilder();
+	private static final WallCells WALLS = new WallCells(); // what the walls of holes are made from
+	private static final float[] WALL_UV = new float[8]; // a wall quad's corners in the atlas
 	private static final List<ProtoStructs.WorldEntity> ENTITIES = new ArrayList<>();
 	private static final ItemStackRenderState ITEM_STATE = new ItemStackRenderState();
 	private static final java.util.Map<Item, float[]> ICONS = new java.util.HashMap<>();
@@ -119,6 +131,7 @@ public final class WorldExporter {
 			resendWanted = false;
 			resendEverything(minecraft, level);
 		}
+		recheckDugWaiting();
 		meshDirtySections(level);
 		// Animated textures (water, lava, fire, ...): the frame for this game tick.
 		atlas.animate(level.getGameTime(), region -> {
@@ -147,6 +160,8 @@ public final class WorldExporter {
 		SENT.clear();
 		LIT.clear();
 		SOLID.clear();
+		DUG.clear();
+		DUG_WAITING.clear();
 		meshesSent = 0; // the first meshes of every resend get logged, not just of the first one
 		// Everything already loaded needs meshing again; later chunk loads mark themselves dirty.
 		int radius = minecraft.options.getEffectiveRenderDistance() + 1;
@@ -159,10 +174,28 @@ public final class WorldExporter {
 				}
 				LevelChunkSection[] sections = chunk.getSections();
 				for (int i = 0; i < sections.length; i++) {
-					if (!sections[i].hasOnlyAir()) {
-						markDirty(cx, chunk.getSectionYFromSectionIndex(i), cz);
+					int sy = chunk.getSectionYFromSectionIndex(i);
+					if (HostDigClient.dugBits(level, cx, sy, cz) != null) {
+						// first, even all air: until its dug cells come again, Half-Life shows a tunnel as rock
+						markDirtyNow(cx, sy, cz);
+					} else if (!sections[i].hasOnlyAir()) {
+						markDirty(cx, sy, cz);
 					}
 				}
+			}
+		}
+	}
+
+	/** Sections whose hole walls waited for a region Half-Life has sent since: meshed again (a region coming doesn't do that by itself). */
+	private static void recheckDugWaiting() {
+		var it = DUG_WAITING.long2LongEntrySet().fastIterator();
+		while (it.hasNext()) {
+			var entry = it.next();
+			long cell = entry.getLongValue();
+			if (HostCollision.isKnown(BlockPos.getX(cell), BlockPos.getY(cell), BlockPos.getZ(cell))) {
+				long section = entry.getLongKey();
+				it.remove();
+				markDirty(SectionPos.x(section), SectionPos.y(section), SectionPos.z(section));
 			}
 		}
 	}
@@ -200,7 +233,12 @@ public final class WorldExporter {
 		}
 		LevelChunkSection section = sectionAt(level, chunk, sy);
 		boolean empty = section == null || section.hasOnlyAir();
-		if (empty && !SENT.contains(key) && !LIT.contains(key) && !SOLID.contains(key)) {
+		long[] dug = HostDigClient.dugBits(level, sx, sy, sz);
+		int dugCount = dug == null ? 0 : DugBits.count(dug);
+		int walls = 0;
+		WALLS.level = level;
+		WALLS.unknown = false;
+		if (empty && !SENT.contains(key) && !LIT.contains(key) && !SOLID.contains(key) && dugCount == 0 && !DUG.contains(key)) {
 			return false; // nothing there and nothing to remove
 		}
 		MESH.reset();
@@ -259,7 +297,17 @@ public final class WorldExporter {
 				}
 			}
 		}
-		if (MESH.vertexCount() == 0 && !SENT.contains(key) && lightCount == 0 && !LIT.contains(key) && solidCount == 0 && !SOLID.contains(key)) {
+		// the walls of the holes dug out of Half-Life's walls here
+		if (dugCount > 0) {
+			walls = DigWalls.add(sx, sy, sz, dug, WALLS, (corners, face, material, uv) -> addWall(level, sx, sy, sz, corners, face, material, uv));
+		}
+		if (WALLS.unknown) {
+			DUG_WAITING.put(key, WALLS.unknownCell); // meshed again once Half-Life sends that region
+		} else {
+			DUG_WAITING.remove(key);
+		}
+		if (MESH.vertexCount() == 0 && !SENT.contains(key) && lightCount == 0 && !LIT.contains(key) && solidCount == 0 && !SOLID.contains(key) && dugCount == 0
+			&& !DUG.contains(key)) {
 			return true;
 		}
 		ByteBuffer header = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).putInt(sx).putInt(sy).putInt(sz).putInt(MESH.vertexCount()).flip();
@@ -298,6 +346,21 @@ public final class WorldExporter {
 					SOLID.remove(key);
 				}
 			}
+			// the cells dug here: Half-Life cuts them out of its walls
+			if (dugCount > 0 || DUG.contains(key)) {
+				ByteBuffer dugHeader = ByteBuffer.allocate(Proto.REN_DUG_BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(sx).putInt(sy).putInt(sz).putInt(dugCount).flip();
+				ByteBuffer dugBody = dugCount > 0 ? ByteBuffer.wrap(DugBits.toBytes(dug)) : ByteBuffer.allocate(0);
+				if (!HostLink.writeRender(Proto.REN_DUG, dugHeader, dugBody)) {
+					markDirty(sx, sy, sz);
+				} else {
+					if (dugCount > 0) {
+						DUG.add(key);
+					} else {
+						DUG.remove(key);
+					}
+					HalfCraft.LOG.info("HalfCraft: sent {} dug cells of section {} {} {} to Half-Life ({} wall quads)", dugCount, sx, sy, sz, walls);
+				}
+			}
 			if (++meshesSent <= 10 || meshesSent % 200 == 0) {
 				HalfCraft.LOG.info("HalfCraft: block mesh for section {} {} {}: {} vertices ({} sections in Half-Life)", sx, sy, sz, MESH.vertexCount(), SENT.size());
 			}
@@ -305,6 +368,32 @@ public final class WorldExporter {
 			markDirty(sx, sy, sz); // ring full; try again later
 		}
 		return true;
+	}
+
+	/**
+	 * A quad of a hole's wall (DigWalls.Out) into the mesh of section (sx, sy, sz): textured as the face
+	 * of a block of the Proto.DIG_* {@code material} (stone if that has none), lit as the dug cell it faces.
+	 */
+	private static void addWall(ClientLevel level, int sx, int sy, int sz, float[] corners, int face, int material, float[] uv) {
+		Direction normal = Direction.from3DDataValue(face);
+		Minecraft minecraft = Minecraft.getInstance();
+		float[] rects = cubeFaces(minecraft, HostDig.stateFor(material));
+		if (rects == null) {
+			rects = cubeFaces(minecraft, HostDig.stateFor(Proto.DIG_STONE));
+			if (rects == null) {
+				return;
+			}
+		}
+		int o = normal == Direction.UP ? 4 : normal == Direction.DOWN ? 8 : 0; // a floor shows the block's top, a ceiling its bottom
+		for (int k = 0; k < 4; k++) {
+			WALL_UV[k * 2] = rects[o] + uv[k * 2] * (rects[o + 2] - rects[o]);
+			WALL_UV[k * 2 + 1] = rects[o + 1] + uv[k * 2 + 1] * (rects[o + 3] - rects[o + 1]);
+		}
+		// the light in the dug cell, half a block out from the quad's middle
+		BlockPos lit = BlockPos.containing(16 * sx + (corners[0] + corners[6]) * 0.5 + 0.5 * normal.getStepX(), 16 * sy + (corners[1] + corners[7]) * 0.5 + 0.5 * normal.getStepY(),
+			16 * sz + (corners[2] + corners[8]) * 0.5 + 0.5 * normal.getStepZ());
+		int light = LightCoordsUtil.pack(level.getBrightness(LightLayer.BLOCK, lit), level.getBrightness(LightLayer.SKY, lit));
+		MESH.quad(corners, WALL_UV, light, normal);
 	}
 
 	private static void exportEntities(Minecraft minecraft, ClientLevel level, float partialTick) {
@@ -535,6 +624,15 @@ public final class WorldExporter {
 			return (translucent ? 2 : 1) | (normal == null ? 0 : (normal.ordinal() + 1) << 4);
 		}
 
+		/** A quad of a hole's wall (see DigWalls): four section-relative corners and their atlas uvs, in white. */
+		void quad(float[] corners, float[] uv, int light, Direction normal) {
+			this.ensure(6 * Proto.REN_VERTEX_BYTES);
+			int flags = flags(false, normal);
+			for (int k : new int[] { 0, 1, 2, 0, 2, 3 }) {
+				this.vertex(corners[k * 3], corners[k * 3 + 1], corners[k * 3 + 2], uv[k * 2], uv[k * 2 + 1], 0xFFFFFFFF, light, flags);
+			}
+		}
+
 		/** Takes Minecraft's fixed face brightness back out of a colour, leaving tint and ambient occlusion. */
 		private static int unshade(int argb, float shade) {
 			if (shade >= 0.999F || shade <= 0.0F) {
@@ -707,6 +805,50 @@ public final class WorldExporter {
 		@Override
 		public VertexConsumer setLineWidth(float width) {
 			return this;
+		}
+	}
+
+	/**
+	 * The world around a section's dug cells as DigWalls reads it: Minecraft's dug cells and blocks,
+	 * Half-Life's rock and the material of its faces. Notes a neighbour whose region hasn't come yet.
+	 */
+	private static final class WallCells implements DigWalls.Cells {
+		ClientLevel level;
+		boolean unknown; // a wall was left out: Half-Life hasn't sent the region of unknownCell yet
+		long unknownCell;
+		private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		private final List<HostTri> tris = new ArrayList<>();
+
+		@Override
+		public boolean dug(int x, int y, int z) {
+			return HostDigClient.dug(this.level, x, y, z);
+		}
+
+		@Override
+		public boolean occludes(int x, int y, int z) {
+			return this.level.getBlockState(this.pos.set(x, y, z)).canOcclude();
+		}
+
+		@Override
+		public long @Nullable [] rock(int x, int y, int z) {
+			long[] rock = HostCollision.rockLayersAt(x, y, z);
+			if (rock == null) {
+				this.unknown = true;
+				this.unknownCell = BlockPos.asLong(x, y, z);
+			}
+			return rock;
+		}
+
+		@Override
+		public int material(int x, int y, int z) {
+			this.tris.clear(); // trianglesNear only adds
+			HostCollision.trianglesNear(new AABB(x, y, z, x + 1, y + 1, z + 1), this.tris);
+			for (HostTri t : this.tris) {
+				if (t.diggable()) {
+					return t.digMaterial;
+				}
+			}
+			return Proto.DIG_STONE;
 		}
 	}
 }
