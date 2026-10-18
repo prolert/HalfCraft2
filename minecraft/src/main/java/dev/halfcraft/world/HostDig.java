@@ -130,7 +130,9 @@ public final class HostDig {
 
 	/**
 	 * LevelChunk.setBlockState, after: a block that went from a dug cell (mined, blown up, pushed away)
-	 * reveals the rock around it, opened as what it was, on the next tick. Leaves the world alone.
+	 * reveals the rock around it, opened as what it was, on the next tick. Nothing while Half-Life lets
+	 * nothing more be dug (hc_dig 0, or no shader DLL): the cells dug stay, none are added. Leaves the
+	 * world alone.
 	 */
 	public static void afterChange(LevelChunk chunk, BlockPos pos, @Nullable BlockState previous, BlockState now) {
 		if (previous == null || previous.canBeReplaced() || !now.canBeReplaced()) {
@@ -139,7 +141,7 @@ public final class HostDig {
 		if (!(chunk.getLevel() instanceof ServerLevel level) || !level.getServer().isSameThread() || !HostNav.inMirror(level)) {
 			return;
 		}
-		if (column(chunk).has(pos.getX(), pos.getY(), pos.getZ())) {
+		if (column(chunk).has(pos.getX(), pos.getY(), pos.getZ()) && !digOff()) {
 			PENDING.add(new Pending(level, pos.immutable(), materialOf(previous), REVEAL_TRIES));
 		}
 	}
