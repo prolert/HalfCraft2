@@ -2,11 +2,12 @@ package dev.halfcraft.world;
 
 /**
  * When a reveal queued around a dug cell ({@link HostDig}) runs. It waits for Half-Life to send the
- * regions of the cell's six neighbours: each tick for {@link #FAST_TRIES} ticks, revealing at the last
- * of them anyway, around the sides it knows; then, while a side is still unknown, again every
- * {@link #SLOW_TICKS} ticks, until a reveal knows all six. Revealing again does no harm: what a reveal
- * revealed is dug and no longer air, which {@link DigRules} leaves. The reveal goes, with nothing done,
- * once the cell's chunk isn't loaded or the cell isn't dug. Pure.
+ * regions of the cell's six neighbours: it tries each tick for {@link #FAST_TRIES} ticks, revealing at
+ * the last of them anyway, around the sides it knows; then, while a side is still unknown, every
+ * {@link #SLOW_TICKS} ticks, until a reveal knows all six. A later try reveals only what the ones before
+ * left: what they revealed is dug, which {@link DigRules} leaves, while a side they left (unknown then,
+ * or with a Minecraft block in it since gone) is revealed if it's still rock. The reveal goes, with
+ * nothing done, once the cell's chunk isn't loaded or the cell isn't dug. Pure.
  */
 final class RevealRetry {
 	/** How many ticks in a row a reveal tries first. */
@@ -33,6 +34,11 @@ final class RevealRetry {
 	private RevealRetry() {
 	}
 
+	/** Whether a reveal of age {@code age} tries on this tick: only then is {@link #step} more than a wait. */
+	static boolean tries(int age) {
+		return age <= LAST_FAST || (age - LAST_FAST) % SLOW_TICKS == 0;
+	}
+
 	/**
 	 * What a reveal of age {@code age} ({@link #older} after each tick, from 0 on its first) does on this tick.
 	 *
@@ -41,7 +47,7 @@ final class RevealRetry {
 	 * @param sidesKnown - Half-Life has sent the regions of all six neighbours
 	 */
 	static Step step(int age, boolean loaded, boolean dug, boolean sidesKnown) {
-		if (age > LAST_FAST && (age - LAST_FAST) % SLOW_TICKS != 0) {
+		if (!tries(age)) {
 			return Step.SLOW_WAIT;
 		}
 		if (!loaded || !dug) {

@@ -4,7 +4,9 @@ import dev.halfcraft.HalfCraft;
 import dev.halfcraft.link.HostLink;
 import dev.halfcraft.mobs.HostNav;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentRegistry;
 import net.fabricmc.fabric.api.attachment.v1.AttachmentSyncPredicate;
@@ -44,13 +46,17 @@ public final class HostDig {
 	private static final double REACH = 8.0;
 	// server thread only
 	private static final HostLink.HostState HOST = new HostLink.HostState();
-	// the reveals still to do; server thread only
-	private static final List<Pending> PENDING = new ArrayList<>();
+	// the reveals still to do, one a cell, in the order they were first queued; server thread only
+	private static final Map<Cell, Pending> PENDING = new LinkedHashMap<>();
+
+	/** A dug cell of a level. */
+	private record Cell(ServerLevel level, BlockPos pos) {
+	}
 
 	/** A dug cell whose neighbours are to be revealed, opened as {@code material}; {@code age}: see {@link RevealRetry}. */
-	private record Pending(ServerLevel level, BlockPos pos, int material, int age) {
+	private record Pending(Cell cell, int material, int age) {
 		Pending older() {
-			return new Pending(this.level, this.pos, this.material, RevealRetry.older(this.age));
+			return new Pending(this.cell, this.material, RevealRetry.older(this.age));
 		}
 	}
 
@@ -117,7 +123,7 @@ public final class HostDig {
 			}
 		}
 		level.levelEvent(LevelEvent.PARTICLES_AND_SOUND_DESTROY_BLOCK, pos, Block.getId(state));
-		PENDING.add(new Pending(level, pos.immutable(), material, 0));
+		queue(level, pos, material);
 		HalfCraft.LOG.info("HalfCraft: dug {} out of Half-Life's walls as {}", pos.toShortString(), DigMaterials.blockId(material));
 	}
 
@@ -145,27 +151,41 @@ public final class HostDig {
 			return;
 		}
 		if (column(chunk).has(pos.getX(), pos.getY(), pos.getZ())) {
-			PENDING.add(new Pending(level, pos.immutable(), materialOf(previous), 0));
+			queue(level, pos, materialOf(previous));
 		}
+	}
+
+	/** Queues a reveal around a dug cell, opened as {@code material}: it replaces one queued there already, starting over. */
+	private static void queue(ServerLevel level, BlockPos pos, int material) {
+		Cell cell = new Cell(level, pos.immutable());
+		PENDING.put(cell, new Pending(cell, material, 0));
 	}
 
 	private static void serverTick(MinecraftServer server) {
 		if (PENDING.isEmpty()) {
 			return;
 		}
-		// what revealing queues (a block it puts changes others) waits for the next tick. One queued before
-		// Half-Life let nothing more be dug still runs: its cell was dug while it could be
-		List<Pending> due = new ArrayList<>(PENDING);
+		// what revealing queues (a block it puts changes others) waits for the next tick; a cell queued again
+		// meanwhile starts over, so that one stays (putIfAbsent) and this one goes. The cell and its sides are
+		// looked at only on the ticks a reveal tries
+		List<Pending> due = new ArrayList<>(PENDING.values());
 		PENDING.clear();
 		for (Pending p : due) {
-			boolean loaded = p.level().isLoaded(p.pos());
-			switch (RevealRetry.step(p.age(), loaded, loaded && isDug(p.level(), p.pos()), sidesKnown(p.pos()))) {
-				case FAST_TRY, SLOW_WAIT -> PENDING.add(p.older());
+			if (!RevealRetry.tries(p.age())) {
+				PENDING.putIfAbsent(p.cell(), p.older());
+				continue;
+			}
+			ServerLevel level = p.cell().level();
+			BlockPos pos = p.cell().pos();
+			boolean loaded = level.isLoaded(pos);
+			boolean dug = loaded && isDug(level, pos);
+			switch (RevealRetry.step(p.age(), loaded, dug, dug && sidesKnown(pos))) {
+				case FAST_TRY, SLOW_WAIT -> PENDING.putIfAbsent(p.cell(), p.older());
 				case REVEAL_KEEP -> {
-					reveal(p.level(), p.pos(), p.material());
-					PENDING.add(p.older());
+					reveal(level, pos, p.material());
+					PENDING.putIfAbsent(p.cell(), p.older());
 				}
-				case REVEAL_DONE -> reveal(p.level(), p.pos(), p.material());
+				case REVEAL_DONE -> reveal(level, pos, p.material());
 				case DROP -> {
 					// its chunk went, or it isn't dug: nothing to reveal around
 				}

@@ -61,6 +61,17 @@ class RevealRetryTest {
 	}
 
 	@Test
+	void shouldTryOnlyOnTheTicksItDoesMoreThanWait() {
+		int age = 0;
+		for (int tick = 0; tick < 1000; tick++) {
+			boolean waits = RevealRetry.step(age, true, true, false) == SLOW_WAIT;
+			assertEquals(!waits, RevealRetry.tries(age), "tick " + tick);
+			assertEquals(tick < 60 || (tick - 59) % 20 == 0, RevealRetry.tries(age), "tick " + tick);
+			age = RevealRetry.older(age);
+		}
+	}
+
+	@Test
 	void shouldStayYoungerThanTheFastTriesAndOneSlowWait() {
 		int age = 0;
 		for (int tick = 0; tick < 10_000; tick++) {
