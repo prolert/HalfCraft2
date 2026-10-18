@@ -157,4 +157,17 @@ namespace halfcraft
 		}
 		return true;
 	}
+
+	/// whether the dig mask, placed around the player again, lays its image out afresh (cleared, the sections with cells dug
+	/// that the new layout has written, the whole texture uploaded) or takes the new layout alone. an image with no texel
+	/// dug that the new layout leaves with none is all zeros either way: on a map without holes, every 32 blocks of
+	/// travel.
+	/// @param built - the image and its texture exist (the first build always lays the image out: it makes the texture)
+	/// @param image_dug - a texel of the image may be dug: a section with cells dug was written into it since the last
+	/// rebuild that wrote none
+	/// @param dug_in_layout - a section with cells dug lies in the new layout
+	inline bool mask_needs_rebuild(bool built, bool image_dug, bool dug_in_layout)
+	{
+		return !built || image_dug || dug_in_layout;
+	}
 }

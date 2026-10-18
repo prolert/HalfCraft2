@@ -845,6 +845,20 @@ namespace
 		CHECK(inside == 8 * 4 * 8);
 	}
 
+	void test_dig_mask_needs_rebuild()
+	{
+		// the first build always lays the image out: it makes the texture
+		CHECK(mask_needs_rebuild(false, false, false));
+		CHECK(mask_needs_rebuild(false, false, true));
+		// no cell dug in the image and none in the new layout: the layout alone moves (no clear, no upload)
+		CHECK(!mask_needs_rebuild(true, false, false));
+		// a section with cells dug in the new layout is written in
+		CHECK(mask_needs_rebuild(true, false, true));
+		// cells dug in the image go, even when the new layout has none
+		CHECK(mask_needs_rebuild(true, true, false));
+		CHECK(mask_needs_rebuild(true, true, true));
+	}
+
 	void test_dug_cells()
 	{
 		// section (-1, 0, 2) (blocks from -16, 0, 32): bit 0 is block (0, 0, 0) of it, bit 561 (byte 70, bit 1) block (1, 2, 3)
@@ -967,6 +981,7 @@ int run_tests()
 	test_dig_mask_shader_texel();
 	test_dig_mask_write_section();
 	test_dig_mask_has_section();
+	test_dig_mask_needs_rebuild();
 	test_dug_cells();
 	test_triangle_clip();
 	if (failed == 0) {

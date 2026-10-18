@@ -28,8 +28,9 @@ namespace halfcraft
 	/// whether minecraft may dig new cells: hc_dig, and the shader dll (proto::kHostDigOff otherwise).
 	bool dig_enabled();
 
-	/// once per frame. with the shader dll, the dig mask takes the sections that changed (laid out afresh around the
-	/// player when it's new or the player went too far from its centre). while a cell is dug in the mask (the holes the
+	/// once per frame. with the shader dll, the dig mask takes the sections that changed (placed around the player when
+	/// it's new or the player went too far from its centre: laid out afresh and uploaded then, unless no cell is dug in
+	/// it before or after, core/hc_dig_mask.h's mask_needs_rebuild). while a cell is dug in the mask (the holes the
 	/// shader dll cuts out of the walls of the map being played, whatever hc_dig says), r_novis 1 and r_portalsopenall 1:
 	/// the rooms behind the holes are drawn whatever the map's vis says. their old values come back once no hole is in
 	/// the mask (holes further away are drawn closed), and off the map.

@@ -41,6 +41,8 @@ namespace halfcraft
 		constexpr float INTO_WALL = 0.5f;          // units behind the face under the crosshair: in the cell the face belongs to
 
 		ConVar hc_dig("hc_dig", "1", FCVAR_ARCHIVE, "halfcraft: 0 - minecraft digs no new cells out of half-life's walls (the ones dug stay dug)");
+		ConVar hc_debug_dig_mask("hc_debug_dig_mask", "0", 0,
+			"halfcraft: log each time the dig mask moves to the player: laid out and uploaded again, or its layout alone (no cell dug in it before or after)");
 
 		// r_novis and r_portalsopenall as they were before force_vis turned them on
 		bool g_vis_forced = false;
@@ -81,6 +83,7 @@ namespace halfcraft
 			std::vector<std::uint8_t> rgba;  // the texture's image
 			DigMaskLayout             layout;
 			bool                      built = false;
+			bool                      dug = false;  // the image may have a texel dug (mask_needs_rebuild's image_dug)
 			std::uint32_t             version = 0;  // the store's, as the mask has it
 			DigMaskState              state{};
 			std::vector<DugSection>   sections;  // dug_since's, kept for the next call
@@ -251,18 +254,38 @@ namespace halfcraft
 			return std::min(changed, dug_since(since, m.sections.data(), changed, now));
 		}
 
-		/// the mask laid out afresh around the player, with every section that has cells dug
-		void rebuild_mask(DigMask& m, const McVec& player)
+		/// the mask's image laid out afresh in its layout, with every section that has cells dug, and the whole texture
+		/// uploaded (made the first time: only ever once, at one size, since the material system's thread may draw with it)
+		void rebuild_mask(DigMask& m)
 		{
-			m.layout = DigMaskLayout::around(player.x, player.y, player.z);
 			m.rgba.assign(static_cast<std::size_t>(DigMaskLayout::TEXTURE) * DigMaskLayout::TEXTURE * TEXEL_BYTES, 0);
+			m.dug = false;
 			const int all = sections_since(m, 0, nullptr);
 			for (int i = 0; i < all; ++i) {
 				const DugSection& section = m.sections[i];
-				write_section(m.layout, section.sx, section.sy, section.sz, section.count > 0 ? section.bits : nullptr, m.rgba.data());
+				const bool        dug = section.count > 0;
+				if (write_section(m.layout, section.sx, section.sy, section.sz, dug ? section.bits : nullptr, m.rgba.data()) && dug) {
+					m.dug = true;
+				}
 			}
 			m.texture.set(m.rgba.data(), DigMaskLayout::TEXTURE, DigMaskLayout::TEXTURE);
 			m.built = true;
+		}
+
+		/// the mask placed around the player: a new layout, and the image laid out afresh unless it's all zeros and stays so
+		/// (no hole near the player before or after: the same zeros, nothing to clear or upload)
+		void recentre_mask(DigMask& m, const McVec& player)
+		{
+			m.layout = DigMaskLayout::around(player.x, player.y, player.z);
+			const bool rebuild = mask_needs_rebuild(m.built, m.dug, any_dug_in(m.layout));
+			if (hc_debug_dig_mask.GetBool()) {
+				log_info("dig: mask around %d %d %d (blocks from %d %d %d): %s", m.layout.ox + DigMaskLayout::CENTRE_XZ, m.layout.oy + DigMaskLayout::CENTRE_Y,
+					m.layout.oz + DigMaskLayout::CENTRE_XZ, m.layout.ox, m.layout.oy, m.layout.oz,
+					rebuild ? "laid out and uploaded again" : "no cell dug in it before or now, the layout alone moves");
+			}
+			if (rebuild) {
+				rebuild_mask(m);
+			}
 		}
 
 		/// one changed section into the mask and its texture: its 16 layers, a square of 16 x 16 texels each
@@ -270,6 +293,9 @@ namespace halfcraft
 		{
 			if (!write_section(m.layout, section.sx, section.sy, section.sz, section.count > 0 ? section.bits : nullptr, m.rgba.data())) {
 				return;  // outside the mask: not cut out until the player comes near
+			}
+			if (section.count > 0) {
+				m.dug = true;  // a section emptied leaves it as it is: another may still have cells dug in the image
 			}
 			// update_region takes the square's own rows, not the image's
 			std::uint8_t block[SECTION_BLOCKS * SECTION_BLOCKS * TEXEL_BYTES];
@@ -296,7 +322,7 @@ namespace halfcraft
 			const int     changed = sections_since(m, m.version, &now);
 			m.version = now;
 			if (!m.built || m.layout.needs_recentre(player.x, player.y, player.z)) {
-				rebuild_mask(m, player);
+				recentre_mask(m, player);  // the sections that changed are in it, or nothing dug is
 			} else {
 				for (int i = 0; i < changed; ++i) {
 					update_mask(m, m.sections[i]);
