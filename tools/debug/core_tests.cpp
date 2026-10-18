@@ -748,6 +748,78 @@ namespace
 		CHECK(b.texel(965, 41, -73, u, v) && u == (k % 8) * 128 + i && v == (k / 8) * 128 + j);
 	}
 
+	void test_dig_mask_shader_texel()
+	{
+		// a map in slot 3 (minecraft x 3072) with its grid at source z -152.5
+		const DigMaskLayout layout = DigMaskLayout::around(3200.5, 70.2, -40.7);
+		CHECK(layout.ox == 3136 && layout.oy == 32 && layout.oz == -112);
+		const MapSlot slot{ 3, -152.5f };
+		float         o[4], l[4];
+		layout.shader_constants(slot, o, l);
+
+		// the centre of block (x, y, z)'s cell, source units
+		const auto centre = [&slot](int x, int y, int z, float p[3]) { mc_to_source(x + .5, y + .5, z + .5, slot, p); };
+		float      p[3];
+		int        u = -1, v = -1;
+		centre(3141, 41, -105, p);
+		CHECK(shader_texel(o, l, p, u, v) && u == 133 && v == 135);  // i 5, j 7, k 9
+		centre(3263, 95, 15, p);
+		CHECK(shader_texel(o, l, p, u, v) && u == 1023 && v == 1023);
+
+		// past each of the layout's edges: false, u and v left alone
+		u = v = -1;
+		centre(3135, 32, -112, p);
+		CHECK(!shader_texel(o, l, p, u, v));
+		centre(3136, 96, -112, p);
+		CHECK(!shader_texel(o, l, p, u, v));
+		centre(3136, 32, 16, p);
+		CHECK(!shader_texel(o, l, p, u, v));
+		CHECK(u == -1 && v == -1);
+
+		// every 3rd cell in and around the layout: the shader finds the texel texel() puts the cell at
+		int wrong = 0, inside = 0;
+		for (int x = 3134; x <= 3266; x += 3) {
+			for (int y = 30; y <= 97; y += 3) {
+				for (int z = -114; z <= 18; z += 3) {
+					int tu = -1, tv = -1;
+					u = v = -1;
+					centre(x, y, z, p);
+					const bool want = layout.texel(x, y, z, tu, tv);
+					const bool got = shader_texel(o, l, p, u, v);
+					wrong += got != want || (got && (u != tu || v != tv)) ? 1 : 0;
+					inside += want ? 1 : 0;
+				}
+			}
+		}
+		CHECK(wrong == 0);
+		CHECK(inside > 0);
+	}
+
+	void test_dig_mask_write_section()
+	{
+		const DigMaskLayout       layout = DigMaskLayout::around(3200.5, 70.2, -40.7);
+		std::vector<std::uint8_t> rgba(1024 * 1024 * 4, 0);
+		std::uint8_t              bits[512] = {};
+		const int                 bit = 3 + 16 * 5 + 256 * 9;  // block (3, 9, 5) of the section
+		bits[bit / 8] = static_cast<std::uint8_t>(1u << (bit % 8));
+		const auto red = [&rgba](int u, int v) { return rgba[(static_cast<std::size_t>(v) * 1024 + u) * 4]; };
+
+		// section (196, 2, -7): blocks from (3136, 32, -112), the layout's corner
+		CHECK(write_section(layout, 196, 2, -7, bits, rgba.data()));
+		CHECK(red(131, 133) == 255);  // cell (3139, 41, -107)
+		const std::size_t texel = (133 * 1024 + 131) * 4;
+		CHECK(rgba[texel + 1] == 0 && rgba[texel + 2] == 0 && rgba[texel + 3] == 0);
+		CHECK(red(132, 133) == 0 && red(131, 134) == 0 && red(3, 5) == 0);
+
+		// no mask: nothing dug in the section
+		CHECK(write_section(layout, 196, 2, -7, nullptr, rgba.data()));
+		CHECK(red(131, 133) == 0);
+
+		// a section outside the layout writes nothing
+		CHECK(!write_section(layout, 195, 2, -7, bits, rgba.data()));
+		CHECK(std::all_of(rgba.begin(), rgba.end(), [](std::uint8_t byte) { return byte == 0; }));
+	}
+
 	void test_dug_cells()
 	{
 		// section (-1, 0, 2) (blocks from -16, 0, 32): bit 0 is block (0, 0, 0) of it, bit 561 (byte 70, bit 1) block (1, 2, 3)
@@ -867,6 +939,8 @@ int run_tests()
 	test_void_region_finds_the_rock_behind_the_walls();
 	test_void_region_tests_a_convex_by_its_planes();
 	test_dig_mask_layout_places_the_cells_in_the_texture();
+	test_dig_mask_shader_texel();
+	test_dig_mask_write_section();
 	test_dug_cells();
 	test_triangle_clip();
 	if (failed == 0) {

@@ -1,0 +1,39 @@
+//-----------------------------------------------------------------------------
+//	HALFCRAFT_SHADERS.VPC
+//
+//	halfcraft's code in game_shader_generic_halfcraft.dll (hl2dm only). included
+//	from materialsystem\stdshaders\game_shader_generic_halfcraft.vpc
+//	(source\sdk\halfcraft-hl2dm.patch), which sets $HALFCRAFTROOT to the repo.
+//	valve's c++14, no /std:c++17: it would apply to valve's code in the dll too.
+//	build\shaders\include has the .inc files make build's shader compile writes
+//	(tools\halfcraft\build.py), which the world shaders' c++ includes.
+//-----------------------------------------------------------------------------
+
+$Macro HALFCRAFTDIR		"$HALFCRAFTROOT\source"
+
+$Configuration
+{
+	$Compiler
+	{
+		$AdditionalIncludeDirectories	"$BASE;$HALFCRAFTROOT\build\shaders\include;$HALFCRAFTDIR\src"
+	}
+}
+
+$Project
+{
+	$Folder	"Source Files"
+	{
+		$Folder	"HalfCraft"
+		{
+			$File	"$HALFCRAFTDIR\src\shaders\hc_shader_dig.h"
+			$File	"$HALFCRAFTDIR\src\shaders\hc_shader_dig.cpp"
+			$File	"$HALFCRAFTDIR\src\shared\hc_dig_abi.h"
+
+			$Folder	"Core"
+			{
+				$File	"$HALFCRAFTDIR\src\core\hc_module.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_module.cpp"
+			}
+		}
+	}
+}

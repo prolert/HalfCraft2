@@ -67,6 +67,7 @@ $Project
 				$File	"$HALFCRAFTPROTO\halfcraft_protocol.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_atomic.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_campaign.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_dig_mask.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_dug_cells.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_grid.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_link.h"

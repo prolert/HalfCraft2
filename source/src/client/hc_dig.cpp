@@ -14,9 +14,12 @@
 #include <mutex>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "halfcraft_protocol.h"
 #include "client/hc_dig.h"
+#include "client/hc_texture.h"
+#include "core/hc_dig_mask.h"
 #include "core/hc_dug_cells.h"
 #include "core/hc_log.h"
 #include "core/hc_module.h"
@@ -33,6 +36,7 @@ namespace halfcraft
 	namespace
 	{
 		constexpr int   SECTION_BLOCKS = 16;
+		constexpr int   TEXEL_BYTES = 4;  // the dig mask's rgba
 		constexpr float CROSSHAIR_REACH = 180.0f;  // units hc_debug_dig_cell looks for a wall in (4.5 blocks: minecraft's reach)
 		constexpr float INTO_WALL = 0.5f;          // units behind the face under the crosshair: in the cell the face belongs to
 
@@ -58,6 +62,31 @@ namespace halfcraft
 		DigStore& store()
 		{
 			static DigStore instance;
+			return instance;
+		}
+
+		MapSlot current_slot()
+		{
+			auto&                       d = store();
+			std::lock_guard<std::mutex> lock(d.lock);
+			return d.slot;
+		}
+
+		/// the dug cells around the player as the shader dll samples them (core/hc_dig_mask.h; main thread)
+		struct DigMask
+		{
+			McTexture                 texture{ "dig_mask" };
+			std::vector<std::uint8_t> rgba;  // the texture's image
+			DigMaskLayout             layout;
+			bool                      built = false;
+			std::uint32_t             version = 0;  // the store's, as the mask has it
+			DigMaskState              state{};
+			std::vector<DugSection>   sections;  // dug_since's, kept for the next call
+		};
+
+		DigMask& mask()
+		{
+			static DigMask instance;
 			return instance;
 		}
 
@@ -196,18 +225,80 @@ namespace halfcraft
 			if (tr.fraction == 1.0f) {
 				return false;
 			}
-			MapSlot slot;
-			{
-				auto&                       d = store();
-				std::lock_guard<std::mutex> lock(d.lock);
-				slot = d.slot;
-			}
 			const Vector inside = tr.endpos - tr.plane.normal * INTO_WALL;
-			const McVec  mc = source_to_mc(inside.Base(), slot);
+			const McVec  mc = source_to_mc(inside.Base(), current_slot());
 			cell[0] = static_cast<int>(std::floor(mc.x));
 			cell[1] = static_cast<int>(std::floor(mc.y));
 			cell[2] = static_cast<int>(std::floor(mc.z));
 			return true;
+		}
+
+		/// the sections dug_since gives, into m.sections
+		/// @return how many it copied
+		int sections_since(DigMask& m, std::uint32_t since, std::uint32_t* now)
+		{
+			const int changed = dug_since(since, nullptr, 0, now);
+			if (changed <= 0) {
+				return 0;
+			}
+			m.sections.resize(static_cast<std::size_t>(changed));
+			return std::min(changed, dug_since(since, m.sections.data(), changed, now));
+		}
+
+		/// the mask laid out afresh around the player, with every section that has cells dug
+		void rebuild_mask(DigMask& m, const McVec& player)
+		{
+			m.layout = DigMaskLayout::around(player.x, player.y, player.z);
+			m.rgba.assign(static_cast<std::size_t>(DigMaskLayout::TEXTURE) * DigMaskLayout::TEXTURE * TEXEL_BYTES, 0);
+			const int all = sections_since(m, 0, nullptr);
+			for (int i = 0; i < all; ++i) {
+				const DugSection& section = m.sections[i];
+				write_section(m.layout, section.sx, section.sy, section.sz, section.count > 0 ? section.bits : nullptr, m.rgba.data());
+			}
+			m.texture.set(m.rgba.data(), DigMaskLayout::TEXTURE, DigMaskLayout::TEXTURE);
+			m.built = true;
+		}
+
+		/// one changed section into the mask and its texture: its 16 layers, a square of 16 x 16 texels each
+		void update_mask(DigMask& m, const DugSection& section)
+		{
+			if (!write_section(m.layout, section.sx, section.sy, section.sz, section.count > 0 ? section.bits : nullptr, m.rgba.data())) {
+				return;  // outside the mask: not cut out until the player comes near
+			}
+			// update_region takes the square's own rows, not the image's
+			std::uint8_t block[SECTION_BLOCKS * SECTION_BLOCKS * TEXEL_BYTES];
+			for (int y = 0; y < SECTION_BLOCKS; ++y) {
+				int u = 0, v = 0;
+				m.layout.texel(section.sx * SECTION_BLOCKS, section.sy * SECTION_BLOCKS + y, section.sz * SECTION_BLOCKS, u, v);
+				for (int row = 0; row < SECTION_BLOCKS; ++row) {
+					const std::uint8_t* from = m.rgba.data() + (static_cast<std::size_t>(v + row) * DigMaskLayout::TEXTURE + u) * TEXEL_BYTES;
+					std::memcpy(block + row * SECTION_BLOCKS * TEXEL_BYTES, from, SECTION_BLOCKS * TEXEL_BYTES);
+				}
+				m.texture.update_region(u, v, SECTION_BLOCKS, SECTION_BLOCKS, block);
+			}
+		}
+
+		/// the mask follows the store; without the shader dll it's all zeros
+		void mask_update(const McVec& player)
+		{
+			auto& m = mask();
+			if (!dig_shader_ready()) {
+				m.state = {};
+				return;
+			}
+			std::uint32_t now = m.version;
+			const int     changed = sections_since(m, m.version, &now);
+			m.version = now;
+			if (!m.built || m.layout.needs_recentre(player.x, player.y, player.z)) {
+				rebuild_mask(m, player);
+			} else {
+				for (int i = 0; i < changed; ++i) {
+					update_mask(m, m.sections[i]);
+				}
+			}
+			m.state.texture = m.texture.texture();
+			m.layout.shader_constants(current_slot(), m.state.origin, m.state.layout);
+			m.state.layout[3] = 1.0f;  // on: the cells dug stay cut out whatever hc_dig says
 		}
 	}
 
@@ -261,8 +352,9 @@ namespace halfcraft
 		return ready && hc_dig.GetBool();
 	}
 
-	void dig_update(const McVec& /*player*/, bool in_game)
+	void dig_update(const McVec& player, bool in_game)
 	{
+		mask_update(player);
 		// hc_dig 0 leaves the holes cut out (it only stops new ones): they're seen through all the same
 		force_vis(in_game && dig_shader_ready() && any_dug());
 	}
@@ -270,9 +362,18 @@ namespace halfcraft
 	void dig_shutdown()
 	{
 		force_vis(false);
+		auto& m = mask();
+		m.texture.release();
+		m.state = {};
+		m.built = false;
 		auto&                       d = store();
 		std::lock_guard<std::mutex> lock(d.lock);
 		d.sections.clear();
+	}
+
+	const DigMaskState* dig_mask_state()
+	{
+		return &mask().state;
 	}
 
 	int dug_since(std::uint32_t since, DugSection* out, int max, std::uint32_t* now)
@@ -312,6 +413,12 @@ namespace halfcraft
 extern "C" __declspec(dllexport) int HalfCraft_DugSince(std::uint32_t since, halfcraft::DugSection* out, int max, std::uint32_t* now)
 {
 	return halfcraft::dug_since(since, out, max, now);
+}
+
+// the shader dll's way to the dig mask (hc_dig_abi.h, DigMaskFn)
+extern "C" __declspec(dllexport) const halfcraft::DigMaskState* HalfCraft_DigMask()
+{
+	return halfcraft::dig_mask_state();
 }
 
 CON_COMMAND(hc_debug_dig_cell,

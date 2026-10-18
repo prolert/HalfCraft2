@@ -8,6 +8,8 @@
 // which the sdk's min and max macros need.
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 
 #include "hc_units.h"
 
@@ -20,6 +22,9 @@ namespace halfcraft
 		{
 			return static_cast<int>(std::floor(v / 16.0)) * 16;
 		}
+
+		inline constexpr int SECTION_BLOCKS = 16;  // a section's blocks along each axis
+		inline constexpr int TEXEL_BYTES = 4;      // rgba
 	}
 
 	/// the layers, one for each y, lie in tiles of 8 x 8 in the texture; a dug cell's texel has red 255 (the pixel shader reads
@@ -88,4 +93,57 @@ namespace halfcraft
 			layout[3] = 1.0f;
 		}
 	};
+
+	/// the pixel shader's way to a cell's texel (DigClip, hc_dig_clip_fxc.h), in c++ to test it by: the cell is the
+	/// distance from the mask's corner over 40, floored; its layer's tile and the cell in it give the texel.
+	/// @param origin, layout - c20 and c21 (DigMaskLayout::shader_constants; layout's switch isn't read)
+	/// @param p - a source point, already moved into the cell (the shader's half unit along the view)
+	/// @param u, v - the texel the shader samples, when the cell is in the mask
+	/// @return false when it isn't (u and v are left alone)
+	inline bool shader_texel(const float origin[4], const float layout[4], const float p[3], int& u, int& v)
+	{
+		const float i = std::floor((p[0] - origin[0]) * origin[3]);
+		const float j = std::floor((origin[1] - p[1]) * origin[3]);
+		const float k = std::floor((p[2] - origin[2]) * origin[3]);
+		if (i < 0.0f || j < 0.0f || k < 0.0f || i >= layout[1] || j >= layout[1] || k >= layout[1] * 0.5f) {
+			return false;
+		}
+		const float row = std::floor(k / layout[2]);
+		const float s = ((k - row * layout[2]) * layout[1] + i + 0.5f) * layout[0];
+		const float t = (row * layout[1] + j + 0.5f) * layout[0];
+		u = static_cast<int>(std::floor(s / layout[0]));
+		v = static_cast<int>(std::floor(t / layout[0]));
+		return true;
+	}
+
+	/// one section's cells into the mask's image: each of its 16 layers is a square of 16 x 16 texels, red 255 where a
+	/// cell is dug and 0 where not (green, blue and alpha 0).
+	/// @param sx, sy, sz - the section (minecraft section coords: its blocks start at 16 times them)
+	/// @param bits - its 512 bytes, bit x + 16z + 256y; nullptr: nothing dug in it
+	/// @param rgba - the image, DigMaskLayout::TEXTURE texels square
+	/// @return false when the section isn't in the layout (nothing written)
+	inline bool write_section(const DigMaskLayout& layout, int sx, int sy, int sz, const std::uint8_t* bits, std::uint8_t* rgba)
+	{
+		using dig_mask_detail::SECTION_BLOCKS;
+		using dig_mask_detail::TEXEL_BYTES;
+		const int x0 = sx * SECTION_BLOCKS, y0 = sy * SECTION_BLOCKS, z0 = sz * SECTION_BLOCKS;
+		const int last = SECTION_BLOCKS - 1;
+		int       u = 0, v = 0;
+		if (!layout.texel(x0, y0, z0, u, v) || !layout.texel(x0 + last, y0 + last, z0 + last, u, v)) {
+			return false;
+		}
+		for (int y = 0; y < SECTION_BLOCKS; ++y) {
+			layout.texel(x0, y0 + y, z0, u, v);  // the layer's corner
+			for (int z = 0; z < SECTION_BLOCKS; ++z) {
+				std::uint8_t* texel = rgba + (static_cast<std::size_t>(v + z) * DigMaskLayout::TEXTURE + u) * TEXEL_BYTES;
+				for (int x = 0; x < SECTION_BLOCKS; ++x, texel += TEXEL_BYTES) {
+					const int  bit = x + SECTION_BLOCKS * z + SECTION_BLOCKS * SECTION_BLOCKS * y;
+					const bool dug = bits && ((bits[bit >> 3] >> (bit & 7)) & 1) != 0;
+					texel[0] = dug ? 255 : 0;
+					texel[1] = texel[2] = texel[3] = 0;
+				}
+			}
+		}
+		return true;
+	}
 }

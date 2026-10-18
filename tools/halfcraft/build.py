@@ -1,5 +1,5 @@
-"""halfcraft's half-life 2 side for one or both engines: client.dll + server.dll, two world shaders, the dev
-game folders build\\game-<engine>, then HalfCraft.exe, a release's launcher (build\\launcher).
+"""halfcraft's half-life 2 side for one or both engines: the world shaders, client.dll + server.dll (and hl2dm's
+shader dll), the dev game folders build\\game-<engine>, then HalfCraft.exe, a release's launcher (build\\launcher).
 
 it needs both patched sdk trees (make setup: the shaders always come from source-sdk-2013) and visual studio
 2022+ with its x64 and x86 compilers. the games have to be closed: their dlls get replaced. halfcraft's own
@@ -13,13 +13,16 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from halfcraft import REPO, ToolError, commands, folders, game_folder, sdk, shaders, version, visual_studio, windows
+from halfcraft import REPO, ToolError, commands, game_folder, sdk, shaders, version, visual_studio, windows
 from halfcraft.engines import ENGINES, Engine
 
 LOGS = REPO / "build/logs"
 VPC_SECONDS = 600
 MSBUILD_SECONDS = 3600
 COMPILE_SECONDS = 600
+# ShaderCompile2 on one shader: hc_lightmappedgeneric_ps2x.fxc's full combo set takes 43 minutes with DigClip (21.9
+# with dig stage 1's box); about twice that
+SHADER_SECONDS = 5400
 # msbuild /m puts its node's number in front of each line
 NODE = re.compile(r"^\s*\d+>")
 PROJECT = re.compile(r" \[[^\]]+\]$")
@@ -85,12 +88,11 @@ def msbuild(chain: Toolchain, project: str, platform: str, cwd: Path, target: st
 
 
 def build_hl2dm(chain: Toolchain, *, projects: bool) -> None:
-    """half-life 2: deathmatch's 64-bit engine: hl2dm-sp, valve's 2025 tree."""
+    """half-life 2: deathmatch's 64-bit engine: hl2dm-sp, valve's 2025 tree, and its shader dll."""
     src = sdk.TREES["hl2dm"].source()
     if projects:
-        commands.run(
-            [src / "devtools/bin/vpc.exe", "/episodic", "/define:SOURCESDK", "+game", "/mksln", "games_episodic.sln"], timeout=VPC_SECONDS, what="vpc", cwd=src
-        )
+        vpc = [src / "devtools/bin/vpc.exe", "/episodic", "/define:SOURCESDK", "+game", f"+{ENGINES['hl2dm'].shader_dll}", "/mksln", "games_episodic.sln"]
+        commands.run(vpc, timeout=VPC_SECONDS, what="vpc", cwd=src)
     msbuild(chain, "games_episodic.sln", "win64", src)
 
 
@@ -118,27 +120,32 @@ def build_hl2(chain: Toolchain, *, projects: bool) -> None:
         msbuild(chain, str(Path(project)), "Win32", src)
 
 
-def build_shaders() -> None:
+def build_shaders(engines: list[Engine]) -> None:
     """compiled in a copy of the sdk's shader folder: ShaderCompile2 also writes .inc files next to its input,
-    which would land in the sdk's tree. the 2015 tree has neither the compiler nor flashlight_ps2x.fxc, so they
-    always come from source-sdk-2013.
+    which would land in the sdk's tree (build\\shaders\\include, where the shader dll's c++ finds them). the copy
+    stays from one build to the next: ShaderCompile2 skips a shader whose source, with what it includes, has the crc
+    its .vcs was compiled from, and the shader dll's lightmappedgeneric takes 43 minutes. the 2015 tree has neither
+    the compiler nor flashlight_ps2x.fxc, so they always come from source-sdk-2013; the shader dll's only for an
+    engine that has it.
     """
     src = sdk.TREES["hl2dm"].source()
     stdshaders = src / "materialsystem/stdshaders"
     stage = REPO / "build/shaders"
-    folders.remove_tree(stage)
-    stage.mkdir(parents=True)
+    stage.mkdir(parents=True, exist_ok=True)
     for header in stdshaders.glob("*.h"):
         shutil.copy2(header, stage)
-    shaders.OUT.mkdir()
+    shaders.OUT.mkdir(exist_ok=True)
+    dll = any(engine.shader_dll for engine in engines)
     for shader in shaders.SHADERS:
+        if shader.dll and not dll:
+            continue
         shutil.copy2(stdshaders / shader.source, stage)
         command = [src / "devtools/bin/ShaderCompile2.exe", "-ver", "20b", "-shaderpath", stage, shader.source]
-        compiled = commands.run(command, timeout=COMPILE_SECONDS, what=f"ShaderCompile2 on {shader.source}", cwd=REPO, check=False, capture=True)
+        compiled = commands.run(command, timeout=SHADER_SECONDS, what=f"ShaderCompile2 on {shader.source}", cwd=REPO, check=False, capture=True)
         vcs = stage / f"shaders/fxc/{shader.name}.vcs"
         if compiled.returncode != 0 or not vcs.is_file():
             raise ToolError(f"ShaderCompile2 failed on {shader.source} ({compiled.returncode})")
-        if struct.unpack_from("<iii", vcs.read_bytes()) != (6, shader.combos, shader.dynamic):  # version, combos, dynamic combos
+        if shader.combos is not None and struct.unpack_from("<iii", vcs.read_bytes()) != (6, shader.combos, shader.dynamic):  # version, combos, dynamic combos
             raise ToolError(f"{shader.name}.vcs doesn't have the stock combo layout")
         shutil.copy2(vcs, shaders.OUT)
 
@@ -172,9 +179,9 @@ def build(engines: list[Engine], *, projects: bool = True, launcher: bool = True
     # the shaders and the game folders' campaign files come from source-sdk-2013 whichever engine is built:
     # missing, it should stop the build before anything compiles, not after
     sdk.TREES["hl2dm"].source()
+    build_shaders(engines)  # first: the shader dll's c++ includes the .inc files the compile writes
     for engine in engines:
         (build_hl2 if engine.name == "hl2" else build_hl2dm)(chain, projects=projects)
-    build_shaders()
 
     # the dev game folders: laid out like a release's, plus the symbols
     for engine in engines:

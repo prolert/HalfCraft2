@@ -20,6 +20,9 @@ class Engine:
     app: int  # the steam app whose folder has the engine
     steam_folder: str
     exe: str
+    # the shader dll its sdk tree builds next to client.dll (the engine loads it from game_bin too): its world shaders
+    # leave the cells minecraft dug undrawn. None: none (minecraft digs nothing out of this engine's walls)
+    shader_dll: str | None = None
 
     @property
     def game(self) -> Path:
@@ -27,8 +30,9 @@ class Engine:
         return REPO / f"build/game-{self.name}"
 
     def dlls(self) -> list[Path]:
-        """client.dll and server.dll as its sdk tree's build publishes them."""
-        return [REPO / self.bin / f"{dll}.dll" for dll in ("client", "server")]
+        """client.dll, server.dll and the shader dll as its sdk tree's build publishes them."""
+        names = ("client", "server", *((self.shader_dll,) if self.shader_dll else ()))
+        return [REPO / self.bin / f"{dll}.dll" for dll in names]
 
     def find_exe(self) -> Path:
         """the engine's exe in whichever steam library has it (steamapps\\libraryfolders.vdf lists them)."""
@@ -49,7 +53,9 @@ class Engine:
 
 ENGINES = {
     "hl2": Engine("hl2", "source-sdk-2013-sp/sp/game/mod_episodic/bin", "bin", 220, "Half-Life 2", "hl2.exe"),
-    "hl2dm": Engine("hl2dm", "source-sdk-2013/game/mod_ep1/bin/x64", "bin/x64", 320, "Half-Life 2 Deathmatch", "hl2mp_win64.exe"),
+    "hl2dm": Engine(
+        "hl2dm", "source-sdk-2013/game/mod_ep1/bin/x64", "bin/x64", 320, "Half-Life 2 Deathmatch", "hl2mp_win64.exe", shader_dll="game_shader_generic_halfcraft"
+    ),
 }
 
 

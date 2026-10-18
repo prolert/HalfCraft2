@@ -203,6 +203,8 @@ def write_game_folder(engine: Engine, destination: Path, folder: str, *, symbols
     fxc = destination / "shaders/fxc"
     fxc.mkdir(parents=True, exist_ok=True)
     for shader in shaders.SHADERS:
+        if shader.dll and not engine.shader_dll:
+            continue  # the shader dll's: an engine without it never draws with it
         if not shader.vcs.is_file():
             raise ToolError(f"missing {shader.vcs} (build the shaders first)")
         shutil.copy2(shader.vcs, fxc)

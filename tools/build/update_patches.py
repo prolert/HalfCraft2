@@ -19,6 +19,11 @@ def main() -> None:
     options = parser.parse_args()
 
     for tree in sdk.trees(options.engine):
+        if tree.added:
+            # git diff shows a new file once git knows of it (an empty pathspec would pick every untracked file)
+            listed = commands.git("ls-files", "--others", "--exclude-standard", "-z", "--", *tree.added, repo=tree.path, what=f"git ls-files in {tree.folder}")
+            if new := [file for file in listed.stdout.split("\0") if file]:
+                commands.git("add", "--intent-to-add", "--", *new, repo=tree.path, what=f"git add in {tree.folder}")
         # --output keeps the bytes as git writes them; its line-ending notes are switched off
         diff = ["-c", "core.safecrlf=false", "diff", "--binary", f"--output={tree.patch}", "--", *tree.edited()]
         commands.git(*diff, repo=tree.path, timeout=300, what=f"git diff in {tree.folder}")

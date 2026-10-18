@@ -22,6 +22,8 @@ class Tree:
     commit: str
     sparse: str | None = None  # the one folder checked out, if not all
     libs: tuple[str, ...] = ()  # library projects (in src) the build makes before the game's dlls
+    # git's pathspecs of the files halfcraft adds to the tree: the patch carries them as new files
+    added: tuple[str, ...] = ()
 
     @property
     def path(self) -> Path:
@@ -65,6 +67,8 @@ TREES = {
         "src",
         url="https://github.com/hardlightbridge/hl2dm-sp.git",
         commit="67f81f0f5a64a7f2bb3c0de02409ed63a0570ed5",  # 2026-10-02
+        # the shader dll (game_shader_generic_halfcraft.dll) and valve's code it copies
+        added=("src/materialsystem/stdshaders/hc_*", "src/materialsystem/stdshaders/game_shader_generic_halfcraft.vpc"),
     ),
 }
 
