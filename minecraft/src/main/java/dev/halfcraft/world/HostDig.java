@@ -196,6 +196,11 @@ public final class HostDig {
 			}
 
 			@Override
+			public boolean sky(int x, int y, int z) {
+				return HostCollision.isSkyAt(x, y, z);
+			}
+
+			@Override
 			public boolean dug(int x, int y, int z) {
 				BlockPos pos = new BlockPos(x, y, z);
 				return !level.isLoaded(pos) || isDug(level, pos);

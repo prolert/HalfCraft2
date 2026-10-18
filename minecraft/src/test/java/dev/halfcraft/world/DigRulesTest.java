@@ -21,9 +21,10 @@ class DigRulesTest {
 	private record Pos(int x, int y, int z) {
 	}
 
-	/** Cells known, not dug, air and rockless, except where the sets and maps say otherwise. */
+	/** Cells known, not sky, not dug, air and rockless, except where the sets and maps say otherwise. */
 	private static final class World implements DigRules.Cells {
 		final Set<Pos> unknown = new HashSet<>();
+		final Set<Pos> sky = new HashSet<>();
 		final Set<Pos> dug = new HashSet<>();
 		final Set<Pos> built = new HashSet<>();
 		final Map<Pos, long[]> occupancy = new HashMap<>();
@@ -32,6 +33,11 @@ class DigRulesTest {
 		@Override
 		public boolean known(int x, int y, int z) {
 			return !this.unknown.contains(new Pos(x, y, z));
+		}
+
+		@Override
+		public boolean sky(int x, int y, int z) {
+			return this.sky.contains(new Pos(x, y, z));
 		}
 
 		@Override
@@ -94,6 +100,15 @@ class DigRulesTest {
 		w.built.add(new Pos(0, 0, -1));
 		w.unknown.add(new Pos(0, 1, 0));
 		assertEquals(List.of(), DigRules.reveals(w, 0, 0, 0, DIG_STONE));
+	}
+
+	@Test
+	void shouldLeaveAWhollyRockNeighbourInTheMapsSkyButRevealItsTwinOutOfIt() {
+		World w = new World();
+		w.occupancy.put(new Pos(0, 1, 0), FULL); // inside the skybox's brush: its voxels are rock too
+		w.sky.add(new Pos(0, 1, 0));
+		w.occupancy.put(new Pos(0, -1, 0), FULL);
+		assertEquals(List.of(new DigRules.Reveal(0, -1, 0, DIG_IRON)), DigRules.reveals(w, 0, 0, 0, DIG_IRON));
 	}
 
 	@Test
