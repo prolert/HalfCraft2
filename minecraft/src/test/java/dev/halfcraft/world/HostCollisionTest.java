@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
+import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
@@ -80,6 +81,11 @@ class HostCollisionTest {
 		for (int k = 0; k < 8; k++) {
 			s.set(JAVA_LONG, e + COL_BLOCK_BITS + k * 8L, bits[k]);
 		}
+	}
+
+	/** Cell (x, PY, PZ)'s collision shape, with its geometry or not, the cells in {@code dug} dug. */
+	private static @Nullable VoxelShape shape(int x, boolean geometry, Set<Long> dug) {
+		return HostCollision.collisionShapeAt(x, PY, PZ, geometry, dug, (cells, cx, cy, cz) -> cells.contains(BlockPos.asLong(cx, cy, cz)));
 	}
 
 	private static void assertSameShape(VoxelShape expected, @Nullable VoxelShape actual) {
@@ -203,23 +209,35 @@ class HostCollisionTest {
 			VoxelShape lower = Shapes.box(0, 0, 0, 1, 0.5, 1);
 			VoxelShape top = Shapes.box(0, 0.875, 0, 1, 1, 1);
 
+			Set<Long> none = Set.of();
 			HostCollision.clear(7);
 			HostCollision.readVoid(voids, 0);
-			assertNull(HostCollision.voidShapeAt(PX, PY, PZ));
+			assertNull(shape(PX, false, none));
 			HostCollision.readRegion(region, 0);
-			assertSame(Shapes.block(), HostCollision.voidShapeAt(PX, PY, PZ));
-			assertSame(Shapes.block(), HostCollision.rockShapeAt(PX, PY, PZ));
-			assertSameShape(lower, HostCollision.voidShapeAt(PX + 1, PY, PZ));
-			assertSameShape(Shapes.or(lower, top), HostCollision.rockShapeAt(PX + 1, PY, PZ));
-			assertNull(HostCollision.voidShapeAt(PX + 2, PY, PZ));
-			assertSame(HostCollision.shapeAt(new BlockPos(PX + 2, PY, PZ)), HostCollision.rockShapeAt(PX + 2, PY, PZ));
-			assertNull(HostCollision.rockShapeAt(PX + 3, PY, PZ));
+			assertSame(Shapes.block(), shape(PX, false, none));
+			assertSame(Shapes.block(), shape(PX, true, none));
+			assertSameShape(lower, shape(PX + 1, false, none));
+			assertSameShape(Shapes.or(lower, top), shape(PX + 1, true, none));
+			assertNull(shape(PX + 2, false, none));
+			assertSame(HostCollision.shapeAt(new BlockPos(PX + 2, PY, PZ)), shape(PX + 2, true, none));
+			assertNull(shape(PX + 3, true, none));
+
+			// dug: the void left out, the geometry kept where it's asked for
+			Set<Long> dug = Set.of(BlockPos.asLong(PX, PY, PZ), BlockPos.asLong(PX + 1, PY, PZ));
+			assertNull(shape(PX, false, dug));
+			assertNull(shape(PX, true, dug));
+			assertNull(shape(PX + 1, false, dug));
+			assertSameShape(top, shape(PX + 1, true, dug));
+			// whether a cell is dug is asked only about one with void
+			assertSame(HostCollision.shapeAt(new BlockPos(PX + 2, PY, PZ)), HostCollision.<Object>collisionShapeAt(PX + 2, PY, PZ, true, null, (c, cx, cy, cz) -> {
+				throw new AssertionError("asked whether a cell without void is dug");
+			}));
 
 			// sent again without a kColVoid: the geometry alone
 			HostCollision.readRegion(region, 0);
-			assertNull(HostCollision.voidShapeAt(PX, PY, PZ));
-			assertNull(HostCollision.voidShapeAt(PX + 1, PY, PZ));
-			assertSameShape(top, HostCollision.rockShapeAt(PX + 1, PY, PZ));
+			assertNull(shape(PX, false, none));
+			assertNull(shape(PX + 1, false, none));
+			assertSameShape(top, shape(PX + 1, true, none));
 		}
 	}
 

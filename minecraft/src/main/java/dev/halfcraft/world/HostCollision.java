@@ -180,26 +180,26 @@ public final class HostCollision {
 		return isKnown(x, y, z) ? rock(layersAt(x, y, z), voidLayersAt(x, y, z)) : null;
 	}
 
-	/**
-	 * This cell's void (see {@link #voidLayersAt}) as a collision shape, or null without void. A dug cell
-	 * has it too: callers skip dug cells ({@link HostDig#collisionShape}).
-	 */
-	public static @Nullable VoxelShape voidShapeAt(int x, int y, int z) {
-		return voidShape(x, y, z, false);
+	/** Whether a cell is dug, as {@code context} tells (HostDig: the cell's chunk). */
+	@FunctionalInterface
+	public interface DugCells<C> {
+		boolean dug(C context, int x, int y, int z);
 	}
 
 	/**
-	 * This cell's geometry joined with its void as a collision shape: {@link #shapeAt} for a cell without
-	 * void. Dug cells: see {@link #voidShapeAt}.
+	 * Half-Life's world in a cell as Minecraft's block collisions take it, from one region lookup: with
+	 * {@code geometry}, its brushes' voxels (the players colliding with its exact triangles go without); and
+	 * the void beyond the map in it (see {@link #voidLayersAt}), joined with them, unless the cell is dug:
+	 * once cut, a dug cell's space reads as void too. {@code dug} is asked only about a cell with void.
+	 * Null for nothing.
 	 */
-	public static @Nullable VoxelShape rockShapeAt(int x, int y, int z) {
-		VoxelShape rock = voidShape(x, y, z, true);
-		return rock != null || SHAPES.isEmpty() ? rock : SHAPES.get(BlockPos.asLong(x, y, z));
-	}
-
-	private static @Nullable VoxelShape voidShape(int x, int y, int z, boolean rock) {
+	public static <C> @Nullable VoxelShape collisionShapeAt(int x, int y, int z, boolean geometry, C context, DugCells<C> dug) {
 		RegionVoid region = VOIDS.isEmpty() ? null : VOIDS.get(regionKey(Math.floorDiv(x, REGION_SIZE), Math.floorDiv(y, REGION_SIZE), Math.floorDiv(z, REGION_SIZE)));
-		return region == null ? null : region.shape(Math.floorMod(x, REGION_SIZE), Math.floorMod(y, REGION_SIZE), Math.floorMod(z, REGION_SIZE), rock);
+		VoxelShape voids = region == null ? null : region.shape(Math.floorMod(x, REGION_SIZE), Math.floorMod(y, REGION_SIZE), Math.floorMod(z, REGION_SIZE), geometry);
+		if (voids != null && !dug.dug(context, x, y, z)) {
+			return voids;
+		}
+		return geometry && !SHAPES.isEmpty() ? SHAPES.get(BlockPos.asLong(x, y, z)) : null;
 	}
 
 	/** The layers of {@code occupancy} and {@code voids} joined (either may be null: nothing there), in a new array. */
@@ -215,7 +215,8 @@ public final class HostCollision {
 	/**
 	 * How much of each block of a region is void; the layers are of the blocks that are partly void, and
 	 * so are the shapes Minecraft collides with: their void alone, and joined with their geometry (null
-	 * until the region comes, see {@link #shaped}).
+	 * until the region comes, see {@link #shaped}). They're built for every partly void block as the region
+	 * comes, used or not (two arrays of 512 for a region with any).
 	 */
 	// package-private for HostCollisionTest
 	record RegionVoid(byte[] kinds, long[][] layers, VoxelShape @Nullable [] voidShapes, VoxelShape @Nullable [] rockShapes) {

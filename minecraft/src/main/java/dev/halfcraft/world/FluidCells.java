@@ -11,10 +11,13 @@ import org.jspecify.annotations.Nullable;
  * wall crossing the far side of the cell lets it in, one on the near side or a brush the middle is
  * inside of doesn't), and an empty cell under geometry is under the ground;</li>
  * <li>it falls only where nothing lies under the middle of its cell, below its surface, so with just a
- * wall beside it in the cell it falls past.</li>
+ * wall beside it in the cell it falls past;</li>
+ * <li>the void beyond the map in a cell not dug (HostDig.voidLayers) is rock: no fluid moves into it,
+ * sideways where it'd be in the cell's middle, or down onto it. It has no triangles to stop a fluid
+ * on its way, so a kept cell by a tunnel (a thin brush, the void behind) would let it out of the map.</li>
  * </ul>
  * Pure logic over a cell's floor height (0..1, HostCollision.floorTop) and its 8 voxel layers (bit
- * z * 8 + x of layer y, HostCollision.layersAt; null: no geometry there).
+ * z * 8 + x of layer y, HostCollision.layersAt and the void's; null: none there).
  */
 public final class FluidCells {
 	/** A falling fluid's surface in its cell (8/9). */
@@ -51,10 +54,15 @@ public final class FluidCells {
 	 *
 	 * @param height - the fluid's own height in its cell (0..1)
 	 * @param floor - the floor under its middle, below that height
+	 * @param belowVoid - the void beyond the map in the cell below, unless it's dug
 	 */
-	public static @Nullable String down(float height, float floor, long @Nullable [] layers, float belowFloor, long @Nullable [] belowLayers) {
+	public static @Nullable String down(float height, float floor, long @Nullable [] layers, float belowFloor, long @Nullable [] belowLayers,
+		long @Nullable [] belowVoid) {
 		if (floor > 0.0F || middleBlocked(layers, 0.0, Math.max(height, 1.0 / 8.0)) || middleBlocked(belowLayers, 7.0 / 8.0, 1.0)) {
 			return "resting on ground";
+		}
+		if (middleBlocked(belowVoid, 7.0 / 8.0, 1.0)) {
+			return "void below";
 		}
 		if (belowFloor >= FALLING_SURFACE - MARGIN) {
 			return "ground below";
@@ -69,11 +77,17 @@ public final class FluidCells {
 	 * @param floor - the floor of the cell it leaves
 	 * @param targetFloor - the floor of the cell it'd flow into
 	 * @param targetLayers - that cell's voxels (null: no geometry)
+	 * @param targetVoid - the void beyond the map in that cell, unless it's dug
 	 * @param aboveLayers - the voxels of the cell above that one
 	 * @param reachable - nothing stands between the fluid and that cell's middle, just above its floor
 	 */
-	public static @Nullable String sideways(float surface, float floor, float targetFloor, long @Nullable [] targetLayers, long @Nullable [] aboveLayers,
-		boolean reachable) {
+	public static @Nullable String sideways(float surface, float floor, float targetFloor, long @Nullable [] targetLayers,
+		long @Nullable [] targetVoid, long @Nullable [] aboveLayers, boolean reachable) {
+		// where the fluid would be in that cell's middle: from half a voxel over its floor (a void sub-voxel under
+		// the floor's own) up to its surface, a voxel at least
+		if (middleBlocked(targetVoid, targetFloor + 1.0 / 16.0, Math.max(surface, targetFloor + 1.0 / 8.0))) {
+			return "void beside";
+		}
 		if (targetLayers == null) {
 			// an empty cell under geometry: inside a brush, under the terrain or an overhang
 			return aboveLayers != null ? "under ground" : null;

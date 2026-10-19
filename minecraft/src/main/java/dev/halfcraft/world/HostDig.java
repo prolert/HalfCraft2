@@ -21,6 +21,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.CollisionGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.LevelEvent;
@@ -100,23 +101,32 @@ public final class HostDig {
 	/**
 	 * Half-Life's world in a cell as Minecraft's block collisions take it (BlockCollisionsMixin): with
 	 * {@code geometry}, its brushes' voxels (the players colliding with its exact triangles go without),
-	 * and, unless the cell is dug, the void beyond the map, solid like the rock it is: a cell kept next to
-	 * a hole for the face Half-Life draws on it ({@link DigRules}) leaves no way into the void. Nothing
-	 * outside the map is reached without digging. A dug cell's void is left out: once cut, its space reads
-	 * as void too. Null for nothing. Any thread a collision runs on: it reads the chunk it's given.
+	 * and, unless the cell is dug, the void beyond the map, solid like the rock it is (see
+	 * {@link HostCollision#collisionShapeAt}): a cell kept next to a hole for the face Half-Life draws on it
+	 * ({@link DigRules}) leaves no way into the void. On the maps checked (d1_trainstation_02 and 04) no void
+	 * meets the map's open space where a player stands, so nothing outside them is reached without
+	 * digging. Null for nothing. Any thread a collision runs on: it reads the chunk it's given.
 	 *
-	 * @param chunk - the cell's chunk (a getter that isn't a chunk has no dug cells)
+	 * @param chunk - the cell's chunk (a getter that isn't a chunk or a level has no dug cells)
 	 */
 	public static @Nullable VoxelShape collisionShape(BlockGetter chunk, BlockPos pos, boolean geometry) {
+		return HostCollision.collisionShapeAt(pos.getX(), pos.getY(), pos.getZ(), geometry, chunk, HostDig::dugIn);
+	}
+
+	/**
+	 * The void beyond the map in a cell as 8 layers (see {@link HostCollision#voidLayersAt}), or null for
+	 * none or a dug cell: rock to the water and lava that flow among Half-Life's walls (FlowingFluidMixin).
+	 */
+	public static long @Nullable [] voidLayers(BlockGetter level, BlockPos pos) {
 		int x = pos.getX(), y = pos.getY(), z = pos.getZ();
-		VoxelShape voids = HostCollision.voidShapeAt(x, y, z);
-		if (voids != null && chunk instanceof LevelChunk c && column(c).has(x, y, z)) {
-			voids = null;
-		}
-		if (!geometry) {
-			return voids;
-		}
-		return voids == null ? HostCollision.shapeAt(pos) : HostCollision.rockShapeAt(x, y, z);
+		long[] voids = HostCollision.voidLayersAt(x, y, z);
+		return voids == null || dugIn(level, x, y, z) ? null : voids;
+	}
+
+	/** Whether a getter's cell is dug: the chunk's own, or the level's (or a region's) chunk there, if it has one. */
+	private static boolean dugIn(BlockGetter getter, int x, int y, int z) {
+		BlockGetter chunk = getter instanceof CollisionGetter level ? level.getChunkForCollisions(x >> 4, z >> 4) : getter;
+		return chunk instanceof LevelChunk c && column(c).has(x, y, z);
 	}
 
 	// ---- opening ------------------------------------------------------------------------------
@@ -255,6 +265,11 @@ public final class HostDig {
 			@Override
 			public boolean sky(int x, int y, int z) {
 				return HostCollision.isSkyAt(x, y, z);
+			}
+
+			@Override
+			public boolean loaded(int x, int y, int z) {
+				return level.isLoaded(new BlockPos(x, y, z));
 			}
 
 			@Override

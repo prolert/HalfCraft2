@@ -34,7 +34,10 @@ public final class DigRules {
 		/** All of the cell's Half-Life geometry is the map's sky (its skybox brushes). */
 		boolean sky(int x, int y, int z);
 
-		/** The cell is dug already (or out of reach: left alone). */
+		/** The cell's chunk is loaded. */
+		boolean loaded(int x, int y, int z);
+
+		/** The cell is dug already (or out of reach, its chunk not loaded: left alone). */
 		boolean dug(int x, int y, int z);
 
 		/** Minecraft has nothing in the cell. */
@@ -89,13 +92,17 @@ public final class DigRules {
 	/**
 	 * Whether Half-Life draws a face of the cell (x, y, z): a neighbour that isn't dug has a sub-voxel on
 	 * the face they share that isn't rock (map air against it). A dug neighbour's faces are a hole's walls,
-	 * so it shows nothing; one whose region is unknown counts as exposure, until a later try of the reveal
-	 * knows it ({@link #allKnown}). Rock only behind the face (a thin wall's back, void behind it) is no
-	 * exposure.
+	 * so it shows nothing; one whose chunk isn't loaded or whose region is unknown counts as exposure,
+	 * until a later try of the reveal knows it ({@link #allKnown}). Rock only behind the face (a thin
+	 * wall's back, void behind it) is no exposure.
 	 */
+	// package-private for DigRulesTest
 	static boolean exposed(Cells cells, int x, int y, int z) {
 		for (int s = 0; s < SIDES.length; s++) {
 			int mx = x + SIDES[s][0], my = y + SIDES[s][1], mz = z + SIDES[s][2];
+			if (!cells.loaded(mx, my, mz)) {
+				return true;
+			}
 			if (cells.dug(mx, my, mz)) {
 				continue;
 			}
@@ -113,23 +120,27 @@ public final class DigRules {
 	}
 
 	/**
-	 * Whether Half-Life has sent the regions of every cell {@link #reveals} reads around the dug cell
-	 * (x, y, z): its six neighbours and theirs. Until then a reveal may leave a neighbour that a later try
-	 * reveals ({@link RevealRetry}).
+	 * Whether every cell {@link #reveals} reads around the dug cell (x, y, z), its six neighbours and theirs,
+	 * is in a loaded chunk and a region Half-Life has sent. Until then a reveal may leave a neighbour that a
+	 * later try reveals ({@link RevealRetry}).
 	 */
 	public static boolean allKnown(Cells cells, int x, int y, int z) {
 		for (int[] a : SIDES) {
-			if (!cells.known(x + a[0], y + a[1], z + a[2])) {
+			if (!seen(cells, x + a[0], y + a[1], z + a[2])) {
 				return false;
 			}
 			for (int[] b : SIDES) {
 				boolean back = a[0] + b[0] == 0 && a[1] + b[1] == 0 && a[2] + b[2] == 0; // the dug cell itself
-				if (!back && !cells.known(x + a[0] + b[0], y + a[1] + b[1], z + a[2] + b[2])) {
+				if (!back && !seen(cells, x + a[0] + b[0], y + a[1] + b[1], z + a[2] + b[2])) {
 					return false;
 				}
 			}
 		}
 		return true;
+	}
+
+	private static boolean seen(Cells cells, int x, int y, int z) {
+		return cells.loaded(x, y, z) && cells.known(x, y, z);
 	}
 
 	/** Every sub-voxel is rock: in Half-Life's geometry or in its void. */

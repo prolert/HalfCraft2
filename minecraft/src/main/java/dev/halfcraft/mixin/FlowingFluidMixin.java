@@ -2,6 +2,7 @@ package dev.halfcraft.mixin;
 
 import dev.halfcraft.world.FluidCells;
 import dev.halfcraft.world.HostCollision;
+import dev.halfcraft.world.HostDig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.tags.FluidTags;
@@ -25,6 +26,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * above that cell's floor, so it runs downhill and over bumps but not uphill;</li>
  * <li>an empty cell under any geometry is under the ground (or inside a brush, or an overhang), so no
  * fluid flows sideways into it;</li>
+ * <li>the void beyond the map is rock outside dug cells, so no fluid leaves the map through a kept wall
+ * by a tunnel;</li>
  * <li>it never enters cells Half-Life hasn't described yet (far from the player).</li>
  * </ul>
  */
@@ -50,11 +53,12 @@ public abstract class FlowingFluidMixin {
 		String why;
 		if (direction == Direction.DOWN) {
 			float height = height(sourceState);
-			why = FluidCells.down(height, HostCollision.floorTop(sourcePos, height), layers(sourcePos), targetFloor, layers(targetPos));
+			why = FluidCells.down(height, HostCollision.floorTop(sourcePos, height), layers(sourcePos), targetFloor, layers(targetPos),
+				HostDig.voidLayers(level, targetPos));
 		} else {
 			float floor = floor(sourcePos);
-			why = FluidCells.sideways(surface(sourceState), floor, targetFloor, layers(targetPos), layers(targetPos.above()),
-				reachable(sourcePos, targetPos, Math.max(floor, targetFloor)));
+			why = FluidCells.sideways(surface(sourceState), floor, targetFloor, layers(targetPos), HostDig.voidLayers(level, targetPos),
+				layers(targetPos.above()), reachable(sourcePos, targetPos, Math.max(floor, targetFloor)));
 		}
 		if (why != null) {
 			refused(why, direction, sourcePos, sourceState, targetPos, targetFloor);

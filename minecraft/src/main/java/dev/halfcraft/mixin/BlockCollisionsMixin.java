@@ -3,6 +3,7 @@ package dev.halfcraft.mixin;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
+import dev.halfcraft.mobs.HostNav;
 import dev.halfcraft.world.HostCollision;
 import dev.halfcraft.world.HostDig;
 import net.minecraft.core.BlockPos;
@@ -19,9 +20,9 @@ import org.spongepowered.asm.mixin.injection.At;
 
 /**
  * Adds Half-Life's geometry and its void beyond the map (outside dug cells: HostDig.collisionShape) to
- * every block-collision query. Vanilla movement, step-up, onGround and fall-damage logic then run
- * unchanged against it. The players colliding with Half-Life's exact triangles (HostCollider) get its
- * void here alone: the void has no triangles.
+ * every block-collision query in the mirror dimension. Vanilla movement, step-up, onGround and
+ * fall-damage logic then run unchanged against it. The players colliding with Half-Life's exact
+ * triangles (HostCollider) get its void here alone: the void has no triangles.
  */
 @Mixin(BlockCollisions.class)
 public abstract class BlockCollisionsMixin {
@@ -36,6 +37,9 @@ public abstract class BlockCollisionsMixin {
 		CollisionContext context, BlockState state, CollisionGetter level, BlockPos pos, Operation<VoxelShape> original, @Local BlockGetter chunk
 	) {
 		VoxelShape blockShape = original.call(context, state, level, pos);
+		if (!HostNav.inMirror(level)) {
+			return blockShape; // Half-Life's world is in the mirror dimension only
+		}
 		boolean triangles = context instanceof EntityCollisionContext entityContext && HostCollision.usesSmoothCollider(entityContext.getEntity());
 		VoxelShape host = HostDig.collisionShape(chunk, pos, !triangles);
 		if (host == null) {

@@ -24,9 +24,13 @@ class DigRulesTest {
 	private record Pos(int x, int y, int z) {
 	}
 
-	/** Cells known, not sky, not dug, air and rockless, except where the sets and maps say otherwise. */
+	/**
+	 * Cells known, loaded, not sky, not dug, air and rockless, except where the sets and maps say otherwise.
+	 * One not loaded is dug too, as HostDig has it: out of reach, left alone.
+	 */
 	private static final class World implements DigRules.Cells {
 		final Set<Pos> unknown = new HashSet<>();
+		final Set<Pos> unloaded = new HashSet<>();
 		final Set<Pos> sky = new HashSet<>();
 		final Set<Pos> dug = new HashSet<>();
 		final Set<Pos> built = new HashSet<>();
@@ -44,8 +48,13 @@ class DigRulesTest {
 		}
 
 		@Override
+		public boolean loaded(int x, int y, int z) {
+			return !this.unloaded.contains(new Pos(x, y, z));
+		}
+
+		@Override
 		public boolean dug(int x, int y, int z) {
-			return this.dug.contains(new Pos(x, y, z));
+			return this.dug.contains(new Pos(x, y, z)) || !loaded(x, y, z);
 		}
 
 		@Override
@@ -243,6 +252,22 @@ class DigRulesTest {
 	}
 
 	@Test
+	void shouldHoldANeighbourBackWhileACellNextToItIsNotLoaded() {
+		// not loaded reads as dug ("left alone"), which shows no face: it mustn't let a reveal cover one there
+		World w = new World();
+		w.occupancy.put(new Pos(1, 0, 0), FULL);
+		w.unloaded.add(new Pos(1, 1, 0));
+		assertEquals(List.of(), reveals(w, 0, 0, 0, DIG_IRON, false));
+		assertFalse(DigRules.allKnown(w, 0, 0, 0));
+		w.unloaded.clear();
+		assertTrue(DigRules.allKnown(w, 0, 0, 0));
+		assertEquals(List.of(new DigRules.Reveal(1, 0, 0, DIG_IRON)), reveals(w, 0, 0, 0, DIG_IRON, false));
+		// the neighbour itself not loaded: left alone
+		w.unloaded.add(new Pos(1, 0, 0));
+		assertEquals(List.of(), reveals(w, 0, 0, 0, DIG_IRON, false));
+	}
+
+	@Test
 	void shouldNotCountAFaceTowardADugCellAsShowing() {
 		World w = new World();
 		w.occupancy.put(new Pos(1, 0, 0), FULL);
@@ -280,11 +305,14 @@ class DigRulesTest {
 			assertFalse(DigRules.exposed(w, 0, 0, 0), "rock on the face of side " + s);
 			w.occupancy.put(m, not(face(s)));
 			assertTrue(DigRules.exposed(w, 0, 0, 0), "air on the face of side " + s);
-			long[] holed = face(s);
-			int y = s == 1 ? 0 : 7;
-			holed[y] &= holed[y] - 1; // one sub-voxel of the face is air
-			w.occupancy.put(m, holed);
-			assertTrue(DigRules.exposed(w, 0, 0, 0), "one sub-voxel of air on the face of side " + s);
+			// one sub-voxel of the face is air: in the face's one layer for a neighbour below or above, in its
+			// bottom and its top layer for one beside
+			for (int y : s == 0 ? new int[] { 7 } : s == 1 ? new int[] { 0 } : new int[] { 0, 7 }) {
+				long[] holed = face(s);
+				holed[y] &= holed[y] - 1;
+				w.occupancy.put(m, holed);
+				assertTrue(DigRules.exposed(w, 0, 0, 0), "one sub-voxel of air in layer " + y + " of the face of side " + s);
+			}
 			w.occupancy.put(m, EMPTY);
 			w.voids.put(m, face(s));
 			assertFalse(DigRules.exposed(w, 0, 0, 0), "void on the face of side " + s);
