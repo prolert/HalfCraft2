@@ -14,29 +14,31 @@ import net.fabricmc.fabric.api.attachment.v1.AttachmentType;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.LevelEvent;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jspecify.annotations.Nullable;
 
 /**
  * Digging into Half-Life's walls. Half-Life's walls, floors and ceilings are geometry, not blocks; mining
  * one opens the cell its surface is in: the cell is dug (Half-Life cuts it out of what it draws and what
  * Minecraft collides with), with the drops of its material's block. Around a dug cell, the cells wholly
- * rock to a tunnel are revealed ({@link DigRules}): dug too, with their material's block put in them,
- * which the rollback leaves alone. The same happens when a block in a dug cell goes, however it goes (a
- * player, TNT, a piston); while Half-Life lets nothing more be dug, only the void beyond the map is
- * revealed. Which cells are dug is kept per chunk ({@link #DUG}), saved with the world and synced to
- * every player.
+ * rock to a tunnel, with no face Half-Life draws, are revealed ({@link DigRules}): dug too, with their
+ * material's block put in them, which the rollback leaves alone. The same happens when a block in a dug
+ * cell goes, however it goes (a player, TNT, a piston); while Half-Life lets nothing more be dug, only the
+ * void beyond the map is revealed. Outside dug cells, that void is solid to Minecraft
+ * ({@link #collisionShape}). Which cells are dug is kept per chunk ({@link #DUG}), saved with the world
+ * and synced to every player.
  */
 public final class HostDig {
 	public static final AttachmentType<DugColumn> DUG = AttachmentRegistry.<DugColumn>create(Identifier.fromNamespaceAndPath(HalfCraft.MOD_ID, "dug"),
@@ -95,6 +97,28 @@ public final class HostDig {
 		return column(level.getChunkAt(pos)).has(pos.getX(), pos.getY(), pos.getZ());
 	}
 
+	/**
+	 * Half-Life's world in a cell as Minecraft's block collisions take it (BlockCollisionsMixin): with
+	 * {@code geometry}, its brushes' voxels (the players colliding with its exact triangles go without),
+	 * and, unless the cell is dug, the void beyond the map, solid like the rock it is: a cell kept next to
+	 * a hole for the face Half-Life draws on it ({@link DigRules}) leaves no way into the void. Nothing
+	 * outside the map is reached without digging. A dug cell's void is left out: once cut, its space reads
+	 * as void too. Null for nothing. Any thread a collision runs on: it reads the chunk it's given.
+	 *
+	 * @param chunk - the cell's chunk (a getter that isn't a chunk has no dug cells)
+	 */
+	public static @Nullable VoxelShape collisionShape(BlockGetter chunk, BlockPos pos, boolean geometry) {
+		int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+		VoxelShape voids = HostCollision.voidShapeAt(x, y, z);
+		if (voids != null && chunk instanceof LevelChunk c && column(c).has(x, y, z)) {
+			voids = null;
+		}
+		if (!geometry) {
+			return voids;
+		}
+		return voids == null ? HostCollision.shapeAt(pos) : HostCollision.rockShapeAt(x, y, z);
+	}
+
 	// ---- opening ------------------------------------------------------------------------------
 
 	/**
@@ -140,8 +164,8 @@ public final class HostDig {
 	/**
 	 * LevelChunk.setBlockState, after: a block that went from a dug cell (mined, blown up, pushed away)
 	 * reveals the rock around it, opened as what it was, on the next tick; while Half-Life lets nothing
-	 * more be dug (hc_dig 0, or no shader DLL), only the void beyond the map around it, or the tunnel
-	 * would open into it (see {@link #reveal}). Leaves the world alone.
+	 * more be dug (hc_dig 0, or no shader DLL), only the void beyond the map around it, so the tunnel
+	 * can be mined on (see {@link #reveal}). Leaves the world alone.
 	 */
 	public static void afterChange(LevelChunk chunk, BlockPos pos, @Nullable BlockState previous, BlockState now) {
 		if (previous == null || previous.canBeReplaced() || !now.canBeReplaced()) {
@@ -179,7 +203,7 @@ public final class HostDig {
 			BlockPos pos = p.cell().pos();
 			boolean loaded = level.isLoaded(pos);
 			boolean dug = loaded && isDug(level, pos);
-			switch (RevealRetry.step(p.age(), loaded, dug, dug && sidesKnown(pos))) {
+			switch (RevealRetry.step(p.age(), loaded, dug, dug && DigRules.allKnown(cells(level), pos.getX(), pos.getY(), pos.getZ()))) {
 				case FAST_TRY, SLOW_WAIT -> PENDING.putIfAbsent(p.cell(), p.older());
 				case REVEAL_KEEP -> {
 					reveal(level, pos, p.material());
@@ -193,20 +217,11 @@ public final class HostDig {
 		}
 	}
 
-	private static boolean sidesKnown(BlockPos pos) {
-		for (Direction d : Direction.values()) {
-			BlockPos side = pos.relative(d);
-			if (!HostCollision.isKnown(side.getX(), side.getY(), side.getZ())) {
-				return false;
-			}
-		}
-		return true;
-	}
-
 	/**
 	 * Reveals the rock around a dug cell. While Half-Life lets nothing more be dug, only the cells without
 	 * its brushes (void beyond the map): marking one with a brush dug would cut it out of Half-Life's walls,
-	 * and void has no collision but the block put there.
+	 * while a void one becomes a block mined like any other (void has no triangle to mine), so the tunnel
+	 * goes on.
 	 */
 	private static void reveal(ServerLevel level, BlockPos pos, int material) {
 		boolean voidOnly = digOff();

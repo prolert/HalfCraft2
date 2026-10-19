@@ -6,6 +6,8 @@ import static java.lang.foreign.ValueLayout.*;
 import dev.halfcraft.HalfCraft;
 import dev.halfcraft.link.HostLink;
 import java.lang.foreign.MemorySegment;
+import java.util.Arrays;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.core.BlockPos;
@@ -178,6 +180,28 @@ public final class HostCollision {
 		return isKnown(x, y, z) ? rock(layersAt(x, y, z), voidLayersAt(x, y, z)) : null;
 	}
 
+	/**
+	 * This cell's void (see {@link #voidLayersAt}) as a collision shape, or null without void. A dug cell
+	 * has it too: callers skip dug cells ({@link HostDig#collisionShape}).
+	 */
+	public static @Nullable VoxelShape voidShapeAt(int x, int y, int z) {
+		return voidShape(x, y, z, false);
+	}
+
+	/**
+	 * This cell's geometry joined with its void as a collision shape: {@link #shapeAt} for a cell without
+	 * void. Dug cells: see {@link #voidShapeAt}.
+	 */
+	public static @Nullable VoxelShape rockShapeAt(int x, int y, int z) {
+		VoxelShape rock = voidShape(x, y, z, true);
+		return rock != null || SHAPES.isEmpty() ? rock : SHAPES.get(BlockPos.asLong(x, y, z));
+	}
+
+	private static @Nullable VoxelShape voidShape(int x, int y, int z, boolean rock) {
+		RegionVoid region = VOIDS.isEmpty() ? null : VOIDS.get(regionKey(Math.floorDiv(x, REGION_SIZE), Math.floorDiv(y, REGION_SIZE), Math.floorDiv(z, REGION_SIZE)));
+		return region == null ? null : region.shape(Math.floorMod(x, REGION_SIZE), Math.floorMod(y, REGION_SIZE), Math.floorMod(z, REGION_SIZE), rock);
+	}
+
 	/** The layers of {@code occupancy} and {@code voids} joined (either may be null: nothing there), in a new array. */
 	// package-private for DigRules
 	static long[] rock(long @Nullable [] occupancy, long @Nullable [] voids) {
@@ -188,9 +212,13 @@ public final class HostCollision {
 		return rock;
 	}
 
-	/** How much of each block of a region is void; the layers are of the blocks that are partly void. */
+	/**
+	 * How much of each block of a region is void; the layers are of the blocks that are partly void, and
+	 * so are the shapes Minecraft collides with: their void alone, and joined with their geometry (null
+	 * until the region comes, see {@link #shaped}).
+	 */
 	// package-private for HostCollisionTest
-	record RegionVoid(byte[] kinds, long[][] layers) {
+	record RegionVoid(byte[] kinds, long[][] layers, VoxelShape @Nullable [] voidShapes, VoxelShape @Nullable [] rockShapes) {
 		/** The void layers of block (bx, by, bz) of the region (each 0-7), or null for none. */
 		long @Nullable [] at(int bx, int by, int bz) {
 			int i = bx + REGION_SIZE * bz + REGION_SIZE * REGION_SIZE * by;
@@ -199,6 +227,36 @@ public final class HostCollision {
 				case VOID_SOME -> this.layers[i];
 				default -> null;
 			};
+		}
+
+		/** Block (bx, by, bz)'s void as a collision shape ({@code rock}: joined with its geometry), or null for none. */
+		@Nullable
+		VoxelShape shape(int bx, int by, int bz, boolean rock) {
+			int i = bx + REGION_SIZE * bz + REGION_SIZE * REGION_SIZE * by;
+			VoxelShape[] shapes = rock ? this.rockShapes : this.voidShapes;
+			return switch (this.kinds[i]) {
+				case VOID_ALL -> Shapes.block();
+				case VOID_SOME -> shapes == null ? null : shapes[i];
+				default -> null;
+			};
+		}
+
+		/** This void with the shapes of its partly void blocks, the region's geometry from LAYERS: its region (rx, ry, rz) has just come. */
+		RegionVoid shaped(int rx, int ry, int rz) {
+			if (Arrays.stream(this.layers).allMatch(Objects::isNull)) {
+				return this; // wholly void blocks only: they're Shapes.block()
+			}
+			VoxelShape[] alone = new VoxelShape[VOID_BLOCKS];
+			VoxelShape[] joined = new VoxelShape[VOID_BLOCKS];
+			for (int i = 0; i < VOID_BLOCKS; i++) {
+				if (this.kinds[i] == VOID_SOME && this.layers[i] != null) {
+					int bx = i % REGION_SIZE, bz = i / REGION_SIZE % REGION_SIZE, by = i / (REGION_SIZE * REGION_SIZE);
+					long[] geometry = layersAt(rx * REGION_SIZE + bx, ry * REGION_SIZE + by, rz * REGION_SIZE + bz);
+					alone[i] = buildShape(this.layers[i]);
+					joined[i] = geometry == null ? alone[i] : buildShape(rock(geometry, this.layers[i]));
+				}
+			}
+			return new RegionVoid(this.kinds, this.layers, alone, joined);
 		}
 	}
 
@@ -450,7 +508,7 @@ public final class HostCollision {
 					long key = regionKey(rx, ry, rz);
 					RegionVoid voids = PENDING_VOIDS.remove(key);
 					if (voids != null) {
-						VOIDS.put(key, voids);
+						VOIDS.put(key, voids.shaped(rx, ry, rz));
 					} else {
 						VOIDS.remove(key); // sent again without kColVoid: no void left in it
 					}
@@ -498,7 +556,7 @@ public final class HostCollision {
 				some++;
 			}
 		}
-		return new RegionVoid(kinds, layers);
+		return new RegionVoid(kinds, layers, null, null);
 	}
 
 	private static void readTris(MemorySegment s, long p) {

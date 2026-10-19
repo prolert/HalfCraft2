@@ -2,12 +2,14 @@ package dev.halfcraft.world;
 
 /**
  * When a reveal queued around a dug cell ({@link HostDig}) runs. It waits for Half-Life to send the
- * regions of the cell's six neighbours: it tries each tick for {@link #FAST_TRIES} ticks, revealing at
- * the last of them anyway, around the sides it knows; then, while a side is still unknown, every
- * {@link #SLOW_TICKS} ticks, until a reveal knows all six. A later try reveals only what the ones before
- * left: what they revealed is dug, which {@link DigRules} leaves, while a side they left (unknown then,
- * or with a Minecraft block in it since gone) is revealed if it's still rock. The reveal goes, with
- * nothing done, once the cell's chunk isn't loaded or the cell isn't dug. Pure.
+ * regions of the cells the reveal reads ({@link DigRules#allKnown}: the cell's six neighbours and theirs,
+ * which say whether a neighbour has a face Half-Life draws): it tries each tick for {@link #FAST_TRIES}
+ * ticks, revealing at the last of them anyway, around the sides it knows; then, while a cell is still
+ * unknown, every {@link #SLOW_TICKS} ticks, until a reveal knows them all. A later try reveals only what
+ * the ones before left: what they revealed is dug, which {@link DigRules} leaves, while a side they left
+ * (unknown then, next to an unknown cell, or with a Minecraft block in it since gone) is revealed if it's
+ * still rock. The reveal goes, with nothing done, once the cell's chunk isn't loaded or the cell isn't
+ * dug. Pure.
  */
 final class RevealRetry {
 	/** How many ticks in a row a reveal tries first. */
@@ -19,13 +21,13 @@ final class RevealRetry {
 
 	/** What a queued reveal does on a tick. */
 	enum Step {
-		/** A side is unknown: it tries again the next tick. */
+		/** A cell it reads is unknown: it tries again the next tick. */
 		FAST_TRY,
 		/** No try on this tick. */
 		SLOW_WAIT,
-		/** Every side is known: it reveals, and it's done. */
+		/** Every cell it reads is known: it reveals, and it's done. */
 		REVEAL_DONE,
-		/** A side is still unknown: it reveals around the known ones and tries again {@link #SLOW_TICKS} later. */
+		/** A cell it reads is still unknown: it reveals around the known ones and tries again {@link #SLOW_TICKS} later. */
 		REVEAL_KEEP,
 		/** The cell's chunk isn't loaded or the cell isn't dug: it's done, with nothing revealed. */
 		DROP
@@ -44,16 +46,16 @@ final class RevealRetry {
 	 *
 	 * @param loaded - the cell's chunk is loaded
 	 * @param dug - the cell is dug
-	 * @param sidesKnown - Half-Life has sent the regions of all six neighbours
+	 * @param allKnown - Half-Life has sent the regions of every cell the reveal reads ({@link DigRules#allKnown})
 	 */
-	static Step step(int age, boolean loaded, boolean dug, boolean sidesKnown) {
+	static Step step(int age, boolean loaded, boolean dug, boolean allKnown) {
 		if (!tries(age)) {
 			return Step.SLOW_WAIT;
 		}
 		if (!loaded || !dug) {
 			return Step.DROP;
 		}
-		if (sidesKnown) {
+		if (allKnown) {
 			return Step.REVEAL_DONE;
 		}
 		return age < LAST_FAST ? Step.FAST_TRY : Step.REVEAL_KEEP;

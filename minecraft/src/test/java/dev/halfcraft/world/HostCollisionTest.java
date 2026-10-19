@@ -1,5 +1,10 @@
 package dev.halfcraft.world;
 
+import static dev.halfcraft.link.Proto.COL_BLOCK_BITS;
+import static dev.halfcraft.link.Proto.COL_BLOCK_BYTES;
+import static dev.halfcraft.link.Proto.COL_BLOCK_X;
+import static dev.halfcraft.link.Proto.COL_BLOCK_Y;
+import static dev.halfcraft.link.Proto.COL_BLOCK_Z;
 import static dev.halfcraft.link.Proto.COL_REGION_COUNT;
 import static dev.halfcraft.link.Proto.COL_REGION_EPOCH;
 import static dev.halfcraft.link.Proto.COL_REGION_HEADER_BYTES;
@@ -15,6 +20,8 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -22,6 +29,11 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.shapes.BooleanOp;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -57,6 +69,22 @@ class HostCollisionTest {
 
 	private static int index(int bx, int by, int bz) {
 		return bx + 8 * bz + 64 * by;
+	}
+
+	/** Block {@code i} of a ColRegion's: at (x, y, z), its occupancy {@code bits}. */
+	private static void block(MemorySegment s, int i, int x, int y, int z, long[] bits) {
+		long e = B + (long) i * COL_BLOCK_BYTES;
+		s.set(JAVA_INT, e + COL_BLOCK_X, x);
+		s.set(JAVA_INT, e + COL_BLOCK_Y, y);
+		s.set(JAVA_INT, e + COL_BLOCK_Z, z);
+		for (int k = 0; k < 8; k++) {
+			s.set(JAVA_LONG, e + COL_BLOCK_BITS + k * 8L, bits[k]);
+		}
+	}
+
+	private static void assertSameShape(VoxelShape expected, @Nullable VoxelShape actual) {
+		assertNotNull(actual);
+		assertFalse(Shapes.joinIsNotEmpty(expected, actual, BooleanOp.NOT_SAME), () -> expected + " but " + actual);
 	}
 
 	@Test
@@ -155,6 +183,43 @@ class HostCollisionTest {
 			HostCollision.clear(8);
 			assertNull(HostCollision.voidLayersAt(PX, PY, PZ));
 			assertNull(HostCollision.rockLayersAt(PX, PY, PZ));
+		}
+	}
+
+	@Test
+	void shouldCollideWithTheVoidAloneOrJoinedWithTheGeometryOnceItsRegionComes() {
+		try (Arena arena = Arena.ofConfined()) {
+			// block 0 of region (1, 0, 2) wholly void; block 1 void in its lower half, a brush in its top layer;
+			// block 2 a brush without void
+			MemorySegment voids = header(arena, 1, 512 + 64);
+			voids.set(JAVA_BYTE, B + index(0, 0, 0), (byte) VOID_ALL);
+			voids.set(JAVA_BYTE, B + index(1, 0, 0), (byte) VOID_SOME);
+			for (int y = 0; y < 4; y++) {
+				voids.set(JAVA_LONG, B + 512 + y * 8L, -1L);
+			}
+			MemorySegment region = header(arena, 2, 2L * COL_BLOCK_BYTES);
+			block(region, 0, PX + 1, PY, PZ, layers(0, 0, 0, 0, 0, 0, 0, -1));
+			block(region, 1, PX + 2, PY, PZ, FULL);
+			VoxelShape lower = Shapes.box(0, 0, 0, 1, 0.5, 1);
+			VoxelShape top = Shapes.box(0, 0.875, 0, 1, 1, 1);
+
+			HostCollision.clear(7);
+			HostCollision.readVoid(voids, 0);
+			assertNull(HostCollision.voidShapeAt(PX, PY, PZ));
+			HostCollision.readRegion(region, 0);
+			assertSame(Shapes.block(), HostCollision.voidShapeAt(PX, PY, PZ));
+			assertSame(Shapes.block(), HostCollision.rockShapeAt(PX, PY, PZ));
+			assertSameShape(lower, HostCollision.voidShapeAt(PX + 1, PY, PZ));
+			assertSameShape(Shapes.or(lower, top), HostCollision.rockShapeAt(PX + 1, PY, PZ));
+			assertNull(HostCollision.voidShapeAt(PX + 2, PY, PZ));
+			assertSame(HostCollision.shapeAt(new BlockPos(PX + 2, PY, PZ)), HostCollision.rockShapeAt(PX + 2, PY, PZ));
+			assertNull(HostCollision.rockShapeAt(PX + 3, PY, PZ));
+
+			// sent again without a kColVoid: the geometry alone
+			HostCollision.readRegion(region, 0);
+			assertNull(HostCollision.voidShapeAt(PX, PY, PZ));
+			assertNull(HostCollision.voidShapeAt(PX + 1, PY, PZ));
+			assertSameShape(top, HostCollision.rockShapeAt(PX + 1, PY, PZ));
 		}
 	}
 
