@@ -115,11 +115,12 @@ namespace halfcraft
 			if (player->GetMoveType() != MOVETYPE_WALK) {
 				return TAKEOVER_LADDER;
 			}
-			if (player->GetFlags() & (FL_FROZEN | FL_ATCONTROLS)) {
-				return "frozen by the map";
-			}
+			// before the frozen flags: a point_viewcontrol that freezes the player (the g-man's intro) is still a camera
 			if (render->GetViewEntity() != player->entindex()) {
 				return TAKEOVER_CAMERA;
+			}
+			if (player->GetFlags() & (FL_FROZEN | FL_ATCONTROLS)) {
+				return "frozen by the map";
 			}
 			if (riding) {
 				return TAKEOVER_RIDING;
