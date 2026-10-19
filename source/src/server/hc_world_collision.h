@@ -11,7 +11,11 @@
 //                                                         cut out, server/hc_dig.h)
 //   displacements      enginetrace displacement collide -> triangles
 //   static props       their .phy hulls                -> convexes
-//   solid entities     doors, lifts, props, crates     -> convexes, re-sent while they move
+//   solid entities     doors, lifts, props, crates     -> convexes, re-sent while they move: what source's
+//                                                         player movement hits of them (a model's first
+//                                                         solid, a brush model's brushes of the player's
+//                                                         contents, a bone follower's own solid; a model
+//                                                         without one, nothing)
 //   the map's void     the .bsp's tree (models[0])     -> what's behind its walls, for the streamer's
 //                                                         worker (void_query, core/hc_dig_void.h)
 //
@@ -26,6 +30,7 @@
 #include "core/hc_dig_material.h"
 
 class CBaseEntity;
+class CPhysCollide;
 struct model_t;
 
 namespace halfcraft
@@ -80,14 +85,21 @@ namespace halfcraft
 			std::uint8_t              material = DIG_STONE;  // the brush's own (brush_material): what the faces a hole cuts in it dig as
 		};
 
-		const std::vector<Hull>& model_hulls(const model_t* model);
-		void                     add_hulls(const std::vector<Hull>& hulls, const matrix3x4_t& to_world, std::uint32_t flags, ColPrimitives& out) const;
-		void                     add_box(const Vector& mins, const Vector& maxs, const matrix3x4_t& to_world, ColPrimitives& out) const;
-		void                     add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out, std::vector<DigBox>& cut);
-		void                     add_displacements(const Vector& mins, const Vector& maxs, ColPrimitives& out) const;
-		void                     add_static_props(const Vector& mins, const Vector& maxs, ColPrimitives& out);
-		void                     add_entities(const Vector& mins, const Vector& maxs, ColPrimitives& out);
-		void                     add_entity(CBaseEntity* entity, ColPrimitives& out);
+		/// a model's vcollide by solid (cached): of a brush model's, only the pieces of the brushes the player collides with
+		/// @return empty: no vcollide
+		const std::vector<std::vector<Hull>>& model_hulls(const model_t* model);
+		/// a solid's convex pieces, appended
+		/// @param brush - a brush model's (vbsp's): only the pieces of the brushes the player collides with
+		static void solid_hulls(const CPhysCollide* solid, bool brush, std::vector<Hull>& out);
+		void        add_hulls(const std::vector<Hull>& hulls, const matrix3x4_t& to_world, std::uint32_t flags, ColPrimitives& out) const;
+		void        add_box(const Vector& mins, const Vector& maxs, const matrix3x4_t& to_world, ColPrimitives& out) const;
+		void        add_brushes(const Vector& mins, const Vector& maxs, ColPrimitives& out, std::vector<DigBox>& cut);
+		void        add_displacements(const Vector& mins, const Vector& maxs, ColPrimitives& out) const;
+		void        add_static_props(const Vector& mins, const Vector& maxs, ColPrimitives& out);
+		void        add_entities(const Vector& mins, const Vector& maxs, ColPrimitives& out);
+		void        add_entity(CBaseEntity* entity, ColPrimitives& out);
+		/// an entity's vphysics objects' solids, each where vphysics has it (what its TestCollision traces)
+		void add_vphysics(CBaseEntity* entity, ColPrimitives& out);
 
 		/// a diggable world brush's materials (add_brushes), traced the first time it's asked for on this map: sides
 		/// that don't trace cleanly take the brush's
@@ -111,14 +123,14 @@ namespace halfcraft
 			int    frame;
 		};
 
-		MapSlot                                               slot_;
-		std::vector<bool>                                     sky_brushes_;  // by brush index
-		std::unordered_map<int, BrushDig>                     brush_dig_;    // by brush index: the diggable brushes asked for so far
-		std::shared_ptr<const BspTree>                        bsp_;          // the map's tree, which jobs share with the streamer's worker
-		std::unordered_map<const model_t*, std::vector<Hull>> hulls_;
-		std::unordered_map<int, Mover>                        movers_;  // by entity serial-qualified index
-		int                                                   frame_ = 0;
-		const DigState*                                       dig_ = nullptr;
+		MapSlot                                                            slot_;
+		std::vector<bool>                                                  sky_brushes_;  // by brush index
+		std::unordered_map<int, BrushDig>                                  brush_dig_;    // by brush index: the diggable brushes asked for so far
+		std::shared_ptr<const BspTree>                                     bsp_;          // the map's tree, which jobs share with the streamer's worker
+		std::unordered_map<const model_t*, std::vector<std::vector<Hull>>> hulls_;  // by model: model_hulls'
+		std::unordered_map<int, Mover>                                     movers_;  // by entity serial-qualified index
+		int                                                                frame_ = 0;
+		const DigState*                                                    dig_ = nullptr;
 		// by region (region_key): the bounds of the pieces brushes were cut into there, as last gathered (hc_debug_dig)
 		std::unordered_map<std::uint64_t, std::vector<DigBox>> cut_pieces_;
 	};

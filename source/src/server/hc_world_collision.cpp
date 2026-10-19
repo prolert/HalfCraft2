@@ -10,6 +10,9 @@
 #include "bspfile.h"
 #include "filesystem.h"
 #include "world.h"
+#include "model_types.h"
+#include "player.h"
+#include "studio.h"
 
 #include "tier0/valve_minmax_off.h"
 #include <algorithm>
@@ -266,7 +269,9 @@ namespace halfcraft
 			return std::fabs(a.x - b.x) > MOVED_DEGREES || std::fabs(a.y - b.y) > MOVED_DEGREES || std::fabs(a.z - b.z) > MOVED_DEGREES;
 		}
 
-		/// solid things the player collides with that minecraft should see as walls.
+		/// solid things the player collides with that minecraft should see as walls: what source's player movement
+		/// traces (MASK_PLAYERSOLID, CTraceFilterSimple with the player and COLLISION_GROUP_PLAYER_MOVEMENT) hit.
+		/// FSOLID_NOT_STANDABLE stays a wall: the player's movement stands on it all the same.
 		bool is_wall(CBaseEntity* entity)
 		{
 			if (!entity || entity->IsPlayer() || entity->MyNPCPointer() || entity->IsEFlagSet(EFL_KILLME)) {
@@ -282,7 +287,20 @@ namespace halfcraft
 			if (IPhysicsObject* body = entity->VPhysicsGetObject(); body && (body->GetGameFlags() & FVPHYSICS_PLAYER_HELD)) {
 				return false;
 			}
-			return g_pGameRules->ShouldCollide(COLLISION_GROUP_PLAYER_MOVEMENT, entity->GetCollisionGroup());
+			// PassServerEntityFilter: the player goes through what it owns (its grenades, its rockets) and its owner
+			if (CBasePlayer* player = UTIL_GetLocalPlayer(); player && (entity->GetOwnerEntity() == player || player->GetOwnerEntity() == entity)) {
+				return false;
+			}
+			// enginetrace skips a studio model whose contents the mask hasn't
+			if (const model_t* model = entity->GetModel(); model && modelinfo->GetModelType(model) == mod_studio) {
+				const studiohdr_t* studio = modelinfo->GetStudiomodel(model);
+				if (studio && !(studio->contents & MASK_PLAYERSOLID)) {
+					return false;
+				}
+			}
+			// the entity's own say (debris, a choreo vehicle that ignores the player), then the game rules' (passable doors)
+			return entity->ShouldCollide(COLLISION_GROUP_PLAYER_MOVEMENT, MASK_PLAYERSOLID) &&
+				g_pGameRules->ShouldCollide(COLLISION_GROUP_PLAYER_MOVEMENT, entity->GetCollisionGroup());
 		}
 	}
 
@@ -673,9 +691,11 @@ namespace halfcraft
 			ICollideable* prop = props[i];
 			switch (prop->GetSolid()) {
 			case SOLID_VPHYSICS: {
-				const auto& hulls = model_hulls(prop->GetCollisionModel());
-				if (!hulls.empty()) {
-					add_hulls(hulls, prop->CollisionToWorldTransform(), 0, out);
+				const auto& solids = model_hulls(prop->GetCollisionModel());
+				if (!solids.empty()) {
+					for (const auto& hulls : solids) {
+						add_hulls(hulls, prop->CollisionToWorldTransform(), 0, out);
+					}
 					break;
 				}
 				[[fallthrough]];
@@ -704,15 +724,23 @@ namespace halfcraft
 
 	void WorldCollision::add_entity(CBaseEntity* entity, ColPrimitives& out)
 	{
+		// enginetrace hands these the player's swept box (TestCollision): the sdk's that the player can walk into trace
+		// their vphysics objects (a bone follower its own solid of the model, a prop door, a ragdoll each piece); the
+		// ones that trace nothing for it have none (a bullet shield, a commentary node)
+		if (entity->GetSolid() == SOLID_CUSTOM || entity->IsSolidFlagSet(FSOLID_CUSTOMBOXTEST)) {
+			add_vphysics(entity, out);
+			return;
+		}
 		switch (entity->GetSolid()) {
 		case SOLID_BSP:
 		case SOLID_VPHYSICS: {
-			const auto& hulls = model_hulls(entity->GetModel());
-			if (!hulls.empty()) {
-				add_hulls(hulls, entity->EntityToWorldTransform(), 0, out);
-				return;
+			// enginetrace traces the model's first solid (a brush model's only one) where the collision property puts it,
+			// only a brush model's brushes the mask has (model_hulls). a model without one has nothing to hit
+			const auto& solids = model_hulls(entity->GetModel());
+			if (!solids.empty()) {
+				add_hulls(solids[0], entity->CollisionProp()->CollisionToWorldTransform(), 0, out);
 			}
-			break;
+			return;
 		}
 		case SOLID_BBOX: {
 			matrix3x4_t translation;
@@ -726,33 +754,81 @@ namespace halfcraft
 		add_box(entity->CollisionProp()->OBBMins(), entity->CollisionProp()->OBBMaxs(), entity->CollisionProp()->CollisionToWorldTransform(), out);
 	}
 
-	const std::vector<WorldCollision::Hull>& WorldCollision::model_hulls(const model_t* model)
+	void WorldCollision::add_vphysics(CBaseEntity* entity, ColPrimitives& out)
+	{
+		IPhysicsObject* objects[VPHYSICS_MAX_OBJECT_LIST_COUNT];
+		// a ragdoll counts all its pieces, also the ones that didn't fit
+		const int         count = std::min(entity->VPhysicsGetObjectList(objects, VPHYSICS_MAX_OBJECT_LIST_COUNT), VPHYSICS_MAX_OBJECT_LIST_COUNT);
+		const model_t*    model = entity->GetModel();
+		const vcollide_t* collide = model ? modelinfo->GetVCollide(model) : nullptr;
+		const auto&       solids = model_hulls(model);
+		std::vector<Hull> own;
+		for (int i = 0; i < count; ++i) {
+			const CPhysCollide* solid = objects[i] ? objects[i]->GetCollide() : nullptr;
+			if (!solid) {
+				continue;
+			}
+			// each where vphysics has it (a bone follower and a prop door follow their entity there)
+			matrix3x4_t to_world;
+			objects[i]->GetPositionMatrix(&to_world);
+			// the model's solid it was made from, cached with the model; else its own (a scaled one's, a block prop's)
+			const std::vector<Hull>* hulls = nullptr;
+			for (int s = 0; collide && s < collide->solidCount && static_cast<std::size_t>(s) < solids.size() && !hulls; ++s) {
+				hulls = collide->solids[s] == solid ? &solids[static_cast<std::size_t>(s)] : nullptr;
+			}
+			if (!hulls) {
+				own.clear();
+				solid_hulls(solid, false, own);
+				hulls = &own;
+			}
+			add_hulls(*hulls, to_world, 0, out);
+		}
+	}
+
+	const std::vector<std::vector<WorldCollision::Hull>>& WorldCollision::model_hulls(const model_t* model)
 	{
 		const auto it = hulls_.find(model);
 		if (it != hulls_.end()) {
 			return it->second;
 		}
-		auto&       hulls = hulls_[model];
+		auto&       solids = hulls_[model];
 		vcollide_t* collide = model ? modelinfo->GetVCollide(model) : nullptr;
 		if (!collide) {
-			return hulls;
+			return solids;
 		}
+		const bool brush = modelinfo->GetModelType(model) == mod_brush;
 		for (int s = 0; s < collide->solidCount; ++s) {
-			ICollisionQuery* query = physcollision->CreateQueryModel(collide->solids[s]);
-			for (int c = 0; c < query->ConvexCount(); ++c) {
-				Hull hull;
-				for (int t = 0; t < query->TriangleCount(c); ++t) {
-					Vector verts[3];
-					query->GetTriangleVerts(c, t, verts);
-					hull.insert(hull.end(), verts, verts + 3);
-				}
-				if (!hull.empty()) {
-					hulls.push_back(std::move(hull));
+			solids.push_back({});
+			solid_hulls(collide->solids[s], brush, solids.back());
+		}
+		return solids;
+	}
+
+	void WorldCollision::solid_hulls(const CPhysCollide* solid, bool brush, std::vector<Hull>& out)
+	{
+		ICollisionQuery*     query = physcollision->CreateQueryModel(const_cast<CPhysCollide*>(solid));  // it only reads it
+		CUtlVector<Vector4D> planes;
+		for (int c = 0; c < query->ConvexCount(); ++c) {
+			// vbsp tags a brush model's pieces with their brushes (CPlaneList::AddBrushes), and enginetrace hits only
+			// the pieces whose brush's contents the mask has: a monster clip isn't the player's, nor is water
+			int contents = 0;
+			planes.RemoveAll();
+			if (brush && enginetrace->GetBrushInfo(static_cast<int>(query->GetGameData(c)), &planes, &contents) && !(contents & PLAYER_SOLID_BRUSHES)) {
+				continue;
+			}
+			Hull hull;
+			for (int t = 0; t < query->TriangleCount(c); ++t) {
+				Vector verts[3];
+				query->GetTriangleVerts(c, t, verts);
+				for (const Vector& v : verts) {
+					hull.push_back(v);
 				}
 			}
-			physcollision->DestroyQueryModel(query);
+			if (!hull.empty()) {
+				out.push_back(std::move(hull));
+			}
 		}
-		return hulls;
+		physcollision->DestroyQueryModel(query);
 	}
 
 	void WorldCollision::add_hulls(const std::vector<Hull>& hulls, const matrix3x4_t& to_world, std::uint32_t flags, ColPrimitives& out) const
