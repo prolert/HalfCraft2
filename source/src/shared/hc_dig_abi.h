@@ -13,9 +13,9 @@ namespace halfcraft
 	/// image (bgra8888 in the texture, McTexture's): 4 bytes a cell, red 255 where the cell is dug.
 	struct DigMaskState
 	{
-		ITexture* texture;    // s15: the mask's layers in tiles of 8 x 8 (nullptr: none yet, or no cell dug in it)
+		ITexture* texture;    // s11: the mask's layers in tiles of 8 x 8 (nullptr: none yet, or no cell dug in it)
 		float     origin[4];  // c20: (X0, Y1, Z0, 1 / 40), the mask's corner in source units
-		float     layout[4];  // c21: (1 / 1024, 128, 8, enabled)
+		float     layout[4];  // c21: (1 / 1024, 128, 8, w): w 0 off, 1 on, 2 every pixel in the mask cut unread (hc_debug_dig_clip 2)
 	};
 
 	/// client.dll -> the shader dll: the mask to clip by.

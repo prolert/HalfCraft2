@@ -18,7 +18,8 @@ namespace halfcraft
 {
 	namespace
 	{
-		constexpr Sampler_t DIG_MASK_SAMPLER = SHADER_SAMPLER15;  // DigMaskSampler
+		// DigMaskSampler: not s15, which the shader api keeps for the linear-to-gamma table on ps_2_b (hc_dig_clip_fxc.h)
+		constexpr Sampler_t DIG_MASK_SAMPLER = SHADER_SAMPLER11;
 		constexpr int       DIG_ORIGIN_REGISTER = 20;             // c20, g_DigOrigin
 		constexpr int       DIG_LAYOUT_REGISTER = 21;             // c21, g_DigLayout
 

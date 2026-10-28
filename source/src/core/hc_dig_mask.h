@@ -92,7 +92,8 @@ namespace halfcraft
 		/// what the pixel shader (c20 and c21) needs to find the cell of a source point p, in a map's slot:
 		/// the cell is (floor((p.x - X0) / 40), floor((Y1 - p.y) / 40), floor((p.z - Z0) / 40)), its texel texel()'s of it.
 		/// @param origin - c20: {X0 = (ox - x_blocks) * 40, Y1 = -oz * 40, Z0 = oy * 40 + grid_z, 1 / 40}
-		/// @param layout - c21: {1 / 1024, 128, 8, 1}; the last is the mask's switch, which 0 turns off
+		/// @param layout - c21: {1 / 1024, 128, 8, 1}; the last is the mask's switch: 0 off, 1 on, 2 every pixel in the mask cut
+		/// without reading it (client.dll's hc_debug_dig_clip 2)
 		void shader_constants(MapSlot slot, float origin[4], float layout[4]) const
 		{
 			origin[0] = static_cast<float>((ox - slot.x_blocks()) * UNITS_PER_BLOCK);

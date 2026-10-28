@@ -858,16 +858,19 @@ index 00000000..a7c4d0ec
 +}
 diff --git a/src/materialsystem/stdshaders/hc_dig_clip_fxc.h b/src/materialsystem/stdshaders/hc_dig_clip_fxc.h
 new file mode 100644
-index 00000000..72f2cb67
+index 00000000..9903c6fc
 --- /dev/null
 +++ b/src/materialsystem/stdshaders/hc_dig_clip_fxc.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,25 @@
 +// halfcraft: the cells minecraft dug out of half-life's walls, left undrawn by the world shaders of
 +// game_shader_generic_halfcraft.dll (hc_lightmappedgeneric_ps2_3_x.h and hc_flashlight_ps2x.fxc call DigClip first).
 +// the dll binds client.dll's mask (source/src/shaders/hc_shader_dig.cpp); source/src/core/hc_dig_mask.h lays it out,
 +// and its shader_texel and mask_texel_dug are this arithmetic in c++, tested there
 +
-+sampler DigMaskSampler : register( s15 );	// halfcraft: client.dll's mask of dug cells (client/hc_dig.cpp)
++// s11: free in both passes on the pc (the lightmapped pass's s9-s11 are only for ati2n alpha, which its combos leave
++// out). not s15: on ps_2_b the shader api keeps valve's linear-to-gamma table there (common_ps_fxc.h) and binds it
++// itself, so draws after a sky draw in the 3d skybox could sample that grey ramp instead of the mask
++sampler DigMaskSampler : register( s11 );	// halfcraft: client.dll's mask of dug cells (client/hc_dig.cpp)
 +const float4 g_DigOrigin : register( c20 );
 +const float4 g_DigLayout : register( c21 );	// .w: 0 off, 1 on, 2 every pixel in the mask cut (hc_debug_dig_clip 2)
 +void DigClip( float3 worldPos, float3 eyePos )
@@ -886,7 +889,7 @@ index 00000000..72f2cb67
 +}
 diff --git a/src/materialsystem/stdshaders/hc_flashlight_dx9.cpp b/src/materialsystem/stdshaders/hc_flashlight_dx9.cpp
 new file mode 100644
-index 00000000..ea17540f
+index 00000000..1b113904
 --- /dev/null
 +++ b/src/materialsystem/stdshaders/hc_flashlight_dx9.cpp
 @@ -0,0 +1,295 @@
@@ -1007,7 +1010,7 @@ index 00000000..ea17540f
 +		pShaderShadow->EnableTexture( SHADER_SAMPLER7, true );
 +		pShaderShadow->SetShadowDepthFiltering( SHADER_SAMPLER7 );
 +
-+		halfcraft::shader_dig_shadow( pShaderShadow );	// halfcraft: s15, the mask of the cells minecraft dug
++		halfcraft::shader_dig_shadow( pShaderShadow );	// halfcraft: s11, the mask of the cells minecraft dug
 +
 +		if( vars.m_bWorldVertexTransition )
 +		{
@@ -1181,7 +1184,7 @@ index 00000000..ea17540f
 +
 +		SetHcFlashlightVertexShaderConstants( pShader, pShaderAPI, vars.m_bBump, vars.m_nBumpTransform, bDetail, vars.m_nDetailScale,  bSeamless ? false : true );
 +
-+		halfcraft::shader_dig_dynamic( pShader, pShaderAPI );	// halfcraft: s15, c20 and c21: the cells minecraft dug
++		halfcraft::shader_dig_dynamic( pShader, pShaderAPI );	// halfcraft: s11, c20 and c21: the cells minecraft dug
 +	}
 +	pShader->Draw();
 +}
@@ -1249,7 +1252,7 @@ index 00000000..1498c981
 +#endif // HC_FLASHLIGHT_DX9_H
 diff --git a/src/materialsystem/stdshaders/hc_flashlight_ps2x.fxc b/src/materialsystem/stdshaders/hc_flashlight_ps2x.fxc
 new file mode 100644
-index 00000000..44d831a7
+index 00000000..3710ea28
 --- /dev/null
 +++ b/src/materialsystem/stdshaders/hc_flashlight_ps2x.fxc
 @@ -0,0 +1,242 @@
@@ -1310,7 +1313,7 @@ index 00000000..44d831a7
 +sampler FlashlightDepthSampler				: register( s7 );
 +#endif
 +
-+#include "hc_dig_clip_fxc.h"	// halfcraft: s15, c20 and c21: the cells minecraft dug
++#include "hc_dig_clip_fxc.h"	// halfcraft: s11, c20 and c21: the cells minecraft dug
 +
 +struct PS_INPUT
 +{
@@ -1670,7 +1673,7 @@ index 00000000..c62f6c6f
 +END_SHADER
 diff --git a/src/materialsystem/stdshaders/hc_lightmappedgeneric_dx9_helper.cpp b/src/materialsystem/stdshaders/hc_lightmappedgeneric_dx9_helper.cpp
 new file mode 100644
-index 00000000..8cea3a5b
+index 00000000..9768db22
 --- /dev/null
 +++ b/src/materialsystem/stdshaders/hc_lightmappedgeneric_dx9_helper.cpp
 @@ -0,0 +1,982 @@
@@ -2100,7 +2103,7 @@ index 00000000..8cea3a5b
 +				// base texture
 +				pShaderShadow->EnableTexture( SHADER_SAMPLER0, true );
 +				pShaderShadow->EnableSRGBRead( SHADER_SAMPLER0, true );
-+				halfcraft::shader_dig_shadow( pShaderShadow );	// halfcraft: s15, the mask of the cells minecraft dug
++				halfcraft::shader_dig_shadow( pShaderShadow );	// halfcraft: s11, the mask of the cells minecraft dug
 +
 +				if ( hasLightWarpTexture )
 +				{
@@ -2629,7 +2632,7 @@ index 00000000..8cea3a5b
 +			}
 +		}
 +
-+		halfcraft::shader_dig_dynamic( pShader, pShaderAPI );	// halfcraft: s15, c20 and c21: the cells minecraft dug
++		halfcraft::shader_dig_dynamic( pShader, pShaderAPI );	// halfcraft: s11, c20 and c21: the cells minecraft dug
 +
 +		DynamicCmdsOut.End();
 +		pShaderAPI->ExecuteCommandBuffer( DynamicCmdsOut.Base() );
@@ -2764,7 +2767,7 @@ index 00000000..1762d03c
 +#endif // HC_LIGHTMAPPEDGENERIC_DX9_HELPER_H
 diff --git a/src/materialsystem/stdshaders/hc_lightmappedgeneric_ps2_3_x.h b/src/materialsystem/stdshaders/hc_lightmappedgeneric_ps2_3_x.h
 new file mode 100644
-index 00000000..a63bab07
+index 00000000..cee3baaf
 --- /dev/null
 +++ b/src/materialsystem/stdshaders/hc_lightmappedgeneric_ps2_3_x.h
 @@ -0,0 +1,587 @@
@@ -2923,7 +2926,7 @@ index 00000000..a63bab07
 +sampler RandRotSampler			: register( s15 );
 +#endif
 +
-+#include "hc_dig_clip_fxc.h"	// halfcraft: s15, c20 and c21: the cells minecraft dug (the pc's ps20b has them free)
++#include "hc_dig_clip_fxc.h"	// halfcraft: s11, c20 and c21: the cells minecraft dug (the pc's ps20b has them free)
 +
 +struct PS_INPUT
 +{

@@ -537,7 +537,7 @@ namespace halfcraft
 
 		/// hc_debug_dig_clip: the shader dll clips by the mask whatever is dug, every pixel at the mask's first cell (c20.w 0):
 		/// 1 with that texel dug, 2 without reading the mask (c21.w 2). a hole drawn uncut in a view: still uncut at 1, the
-		/// world position the vertex shader gives isn't what the pixel shader gets; cut at 2 alone, s15 doesn't hold the
+		/// world position the vertex shader gives isn't what the pixel shader gets; cut at 2 alone, s11 doesn't hold the
 		/// mask; uncut at 2, the constants don't reach the pixel shader or another one draws there
 		void debug_clip(DigMask& m)
 		{
