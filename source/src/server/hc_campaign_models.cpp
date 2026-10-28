@@ -405,7 +405,9 @@ namespace
 				log_list(std::string("campaign models: ") + map + " plays " + (state ? set_text(state->set) : "the merged models") + ": ", played);
 			}
 			for (const std::string& line : wrong) {
-				halfcraft::log_warning("campaign models: %s: %s", map, line.c_str());
+				// mostly a file ahead of the game folder on GAME: a steam workshop addon hl2.exe mounts (one replacing alyx
+				// was seen), or custom/
+				halfcraft::log_warning("campaign models: %s: %s (likely a file mounted ahead of the game folder: a workshop addon, custom/)", map, line.c_str());
 			}
 			if (!mixed_.empty()) {
 				halfcraft::log_warning("campaign models: %s plays a mix: the game folder still has files of %s, the rest of them comes from the merged content",
