@@ -94,6 +94,7 @@ public final class WorldExporter {
 	private static FluidRenderer fluidRenderer;
 	private static final MeshBuilder MESH = new MeshBuilder();
 	private static final WallCells WALLS = new WallCells(); // what the walls of holes are made from
+	private static final DigWalls.Count NO_WALLS = new DigWalls.Count(0, 0, 0, 0L);
 	private static final float[] WALL_UV = new float[8]; // a wall quad's corners in the atlas
 	private static final List<ProtoStructs.WorldEntity> ENTITIES = new ArrayList<>();
 	private static final ItemStackRenderState ITEM_STATE = new ItemStackRenderState();
@@ -235,10 +236,10 @@ public final class WorldExporter {
 		boolean empty = section == null || section.hasOnlyAir();
 		long[] dug = HostDigClient.dugBits(level, sx, sy, sz);
 		int dugCount = dug == null ? 0 : DugBits.count(dug);
-		int walls = 0;
+		DigWalls.Count walls = NO_WALLS;
+		long wallsNanos = 0;
 		WALLS.level = level;
 		WALLS.unknown = false;
-		WALLS.cut = 0;
 		if (empty && !SENT.contains(key) && !LIT.contains(key) && !SOLID.contains(key) && dugCount == 0 && !DUG.contains(key)) {
 			return false; // nothing there and nothing to remove
 		}
@@ -300,7 +301,9 @@ public final class WorldExporter {
 		}
 		// the walls of the holes dug out of Half-Life's walls here
 		if (dugCount > 0) {
+			long start = System.nanoTime();
 			walls = DigWalls.add(sx, sy, sz, dug, WALLS, (corners, face, material, uv) -> addWall(level, sx, sy, sz, corners, face, material, uv));
+			wallsNanos = System.nanoTime() - start;
 		}
 		if (WALLS.unknown) {
 			DUG_WAITING.put(key, WALLS.unknownCell); // meshed again once Half-Life sends that region
@@ -359,8 +362,9 @@ public final class WorldExporter {
 					} else {
 						DUG.remove(key);
 					}
-					HalfCraft.LOG.info("HalfCraft: sent {} dug cells of section {} {} {} to Half-Life ({} wall quads, {} cut at Half-Life's surface)", dugCount, sx, sy, sz, walls,
-						WALLS.cut);
+					// the walls' cost on the render thread: all of them, and of that, finding where Half-Life's surface cuts them
+					HalfCraft.LOG.info("HalfCraft: sent {} dug cells of section {} {} {} to Half-Life ({} wall quads, {} cut at Half-Life's surface; walls {} ms, cutting {} ms over {} triangles)",
+						dugCount, sx, sy, sz, walls.quads(), walls.cut(), millis(wallsNanos), millis(walls.cuttingNanos()), walls.triangles());
 				}
 			}
 			if (++meshesSent <= 10 || meshesSent % 200 == 0) {
@@ -395,13 +399,12 @@ public final class WorldExporter {
 		BlockPos lit = BlockPos.containing(16 * sx + (corners[0] + corners[6]) * 0.5 + 0.5 * normal.getStepX(), 16 * sy + (corners[1] + corners[7]) * 0.5 + 0.5 * normal.getStepY(),
 			16 * sz + (corners[2] + corners[8]) * 0.5 + 0.5 * normal.getStepZ());
 		int light = LightCoordsUtil.pack(level.getBrightness(LightLayer.BLOCK, lit), level.getBrightness(LightLayer.SKY, lit));
-		for (float c : corners) {
-			if (Math.abs(c * 8 - Math.rint(c * 8)) > 1.0e-3F) {
-				WALLS.cut++; // a corner off the eighths: cut at Half-Life's surface (for the log)
-				break;
-			}
-		}
 		MESH.quad(corners, WALL_UV, light, normal);
+	}
+
+	/** Nanoseconds as milliseconds, for the log. */
+	private static String millis(long nanos) {
+		return String.format(java.util.Locale.ROOT, "%.3f", nanos / 1.0e6);
 	}
 
 	private static void exportEntities(Minecraft minecraft, ClientLevel level, float partialTick) {
@@ -823,9 +826,10 @@ public final class WorldExporter {
 	 */
 	private static final class WallCells implements DigWalls.Cells {
 		ClientLevel level;
-		boolean unknown; // a wall was left out: Half-Life hasn't sent the region of unknownCell yet
+		// a wall was left out, or one's sub-voxel by a face's edge left whole: Half-Life hasn't sent the region of
+		// unknownCell yet
+		boolean unknown;
 		long unknownCell;
-		int cut; // the section's wall quads cut at Half-Life's surface (for the log)
 		private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		private final List<HostTri> tris = new ArrayList<>();
 
