@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import BinaryIO
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_DESKTOP_ALL_ACCESS = 0x10000000  # GENERIC_ALL
 _TH32CS_SNAPPROCESS = 0x2
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _SYNCHRONIZE = 0x00100000
@@ -54,6 +56,14 @@ _kernel32.OpenMutexW.restype = wintypes.HANDLE
 _kernel32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
 _kernel32.CreateFileW.restype = wintypes.HANDLE
 _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+_user32.OpenDesktopW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+_user32.OpenDesktopW.restype = wintypes.HANDLE
+_user32.CreateDesktopW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p)
+_user32.CreateDesktopW.restype = wintypes.HANDLE
+_user32.CloseDesktop.argtypes = (wintypes.HANDLE,)
+_user32.EnumDesktopWindows.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.LPARAM)
+_user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+_ENUM_WINDOWS = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 _kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
 
 
@@ -88,6 +98,39 @@ def exe_path(pid: int) -> str | None:
         return path.value if _kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)) else None
     finally:
         _kernel32.CloseHandle(handle)
+
+
+def open_hidden_desktop(*, create: bool) -> int | None:
+    """a handle to HIDDEN_DESKTOP (CloseDesktop it), made first when create says so; None when it isn't there."""
+    handle = _user32.OpenDesktopW(HIDDEN_DESKTOP, 0, False, _DESKTOP_ALL_ACCESS)
+    if not handle and create:
+        handle = _user32.CreateDesktopW(HIDDEN_DESKTOP, None, None, 0, _DESKTOP_ALL_ACCESS, None)
+    return handle or None
+
+
+def close_desktop(handle: int) -> None:
+    _user32.CloseDesktop(handle)
+
+
+def windows_on_hidden_desktop() -> list[tuple[int, int]]:
+    """the top-level windows on HIDDEN_DESKTOP with their processes' pids, front to back (none when it isn't there)."""
+    desktop = open_hidden_desktop(create=False)
+    if not desktop:
+        return []
+    found: list[tuple[int, int]] = []
+
+    def each(window: int, _: int) -> bool:
+        pid = wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(window, ctypes.byref(pid))
+        if pid.value != os.getpid():
+            found.append((window, pid.value))
+        return True
+
+    try:
+        _user32.EnumDesktopWindows(desktop, _ENUM_WINDOWS(each), 0)
+    finally:
+        _user32.CloseDesktop(desktop)
+    return found
 
 
 def processes(*names: str) -> list[Process]:

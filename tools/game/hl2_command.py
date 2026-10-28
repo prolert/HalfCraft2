@@ -14,8 +14,6 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools\, where the halfcraft package is
-from hidden_desktop import windows_on_desktop
-
 from halfcraft import ToolError, commands, engines, windows
 
 SECONDS = 15
@@ -53,10 +51,14 @@ def main() -> None:
     if not running:
         raise ToolError("the game isn't running (make run)")
     engine, game = running
-    # -hijack finds the game's window only on its own desktop: from elsewhere the hand-over would start a second game
-    # here, with its "only one instance" box
-    if not os.environ.get(windows.HIDDEN_DESKTOP_ENV) and any(pid == game.pid for _, pid in windows_on_desktop()):
+    # -hijack finds the game's window only on its own desktop: from the other one the hand-over would start a second
+    # game there, with its "only one instance" box, and the command would never arrive
+    hidden = any(pid == game.pid for _, pid in windows.windows_on_hidden_desktop())
+    sent_from_hidden = bool(os.environ.get(windows.HIDDEN_DESKTOP_ENV))
+    if hidden and not sent_from_hidden:
         raise ToolError(f"the game runs on the {windows.HIDDEN_DESKTOP} desktop: send it through python tools/game/hidden_desktop.py")
+    if sent_from_hidden and not hidden:
+        raise ToolError("the game runs on your desktop: use plain make cmd (or tools/game/hl2_command.py) without tools/game/hidden_desktop.py")
     exe = engine.find_exe()
     for command in options.commands:
         send(engine, exe, game, command)

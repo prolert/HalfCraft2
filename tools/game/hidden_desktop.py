@@ -20,7 +20,6 @@ minecraft on it. the desktop lasts while something runs on it. prints the comman
 
 import argparse
 import ctypes
-import os
 import subprocess
 import sys
 from ctypes import wintypes
@@ -33,7 +32,6 @@ DESKTOP = windows.HIDDEN_DESKTOP
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_GENERIC_ALL = 0x10000000
 _STARTF_USESTDHANDLES = 0x100
 _DUPLICATE_SAME_ACCESS = 0x2
 _INFINITE = 0xFFFFFFFF
@@ -71,13 +69,6 @@ class _ProcessInformation(ctypes.Structure):
     _fields_ = (("hProcess", wintypes.HANDLE), ("hThread", wintypes.HANDLE), ("dwProcessId", wintypes.DWORD), ("dwThreadId", wintypes.DWORD))
 
 
-_user32.OpenDesktopW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-_user32.OpenDesktopW.restype = wintypes.HANDLE
-_user32.CreateDesktopW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p)
-_user32.CreateDesktopW.restype = wintypes.HANDLE
-_user32.CloseDesktop.argtypes = (wintypes.HANDLE,)
-_user32.EnumDesktopWindows.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.LPARAM)
-_user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
 _user32.InternalGetWindowText.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
 _user32.IsWindowVisible.argtypes = (wintypes.HWND,)
 _user32.GetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int)
@@ -86,7 +77,6 @@ _user32.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
 _user32.GetWindow.restype = wintypes.HWND
 _user32.SetThreadDesktop.argtypes = (wintypes.HANDLE,)
 _user32.PostMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
-_ENUM_WINDOWS = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 _kernel32.CreateProcessW.argtypes = (
     wintypes.LPCWSTR,
     wintypes.LPWSTR,
@@ -118,7 +108,7 @@ _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
 
 def _open_desktop() -> int:
     """a handle to the hidden desktop, made when there's none yet."""
-    handle = _user32.OpenDesktopW(DESKTOP, 0, False, _GENERIC_ALL) or _user32.CreateDesktopW(DESKTOP, None, None, 0, _GENERIC_ALL, None)
+    handle = windows.open_hidden_desktop(create=True)
     if not handle:
         raise ToolError(f"no desktop {DESKTOP}: {ctypes.WinError(ctypes.get_last_error())}")
     return handle
@@ -157,34 +147,16 @@ def run(command: list[str]) -> int:
         for handle in std:
             if handle:
                 _kernel32.CloseHandle(handle)
-        _user32.CloseDesktop(desktop)
+        windows.close_desktop(desktop)
 
 
-def windows_on_desktop() -> list[tuple[int, int]]:
-    """the top-level windows on the hidden desktop with their processes, front to back (none when it isn't there)."""
-    desktop = _user32.OpenDesktopW(DESKTOP, 0, False, _GENERIC_ALL)
-    if not desktop:
-        return []
-    found: list[tuple[int, int]] = []
-
-    def each(window: int, _: int) -> bool:
-        pid = wintypes.DWORD()
-        _user32.GetWindowThreadProcessId(window, ctypes.byref(pid))
-        if pid.value != os.getpid():
-            found.append((window, pid.value))
-        return True
-
-    try:
-        _user32.EnumDesktopWindows(desktop, _ENUM_WINDOWS(each), 0)
-    finally:
-        _user32.CloseDesktop(desktop)
-    return found
+windows_on_desktop = windows.windows_on_hidden_desktop
 
 
 def _move_onto_desktop() -> None:
     """this thread onto the hidden desktop (messages and window texts don't cross desktops). the handle stays open: the
     thread uses it, and it goes with the process."""
-    desktop = _user32.OpenDesktopW(DESKTOP, 0, False, _GENERIC_ALL)
+    desktop = windows.open_hidden_desktop(create=False)
     if not desktop:
         raise ToolError(f"no {DESKTOP} desktop: nothing runs there")
     if not _user32.SetThreadDesktop(desktop):
