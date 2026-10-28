@@ -500,7 +500,7 @@ namespace
 				halfcraft::PlannedFile back{ file.name, nullptr, {} };
 				if (file.plan_file) {
 					back.data = plan.files[*file.plan_file].data;
-				} else if (!GameFiles().read(file.name, file.source.c_str(), back.data) || static_cast<long>(back.data.size()) != file.size) {
+				} else if (!GameFiles().read(file.name, file.source.c_str(), back.data, 0) || static_cast<long>(back.data.size()) != file.size) {
 					back.data.clear();
 				}
 				if (!back.data.empty() && write_file(back)) {
