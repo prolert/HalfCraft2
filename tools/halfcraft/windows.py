@@ -19,7 +19,11 @@ _ERROR_FILE_NOT_FOUND = 2
 _ERROR_PATH_NOT_FOUND = 3
 _ERROR_SHARING_VIOLATION = 32
 _ERROR_LOCK_VIOLATION = 33
-_INVALID_HANDLE = ctypes.c_void_p(-1).value
+INVALID_HANDLE = ctypes.c_void_p(-1).value
+
+# tools/game/hidden_desktop.py's desktop, and the variable it sets for what it runs (gradle runs without a daemon then)
+HIDDEN_DESKTOP = "HalfCraftTest"
+HIDDEN_DESKTOP_ENV = "HALFCRAFT_DESKTOP"
 
 
 class _ProcessEntry(ctypes.Structure):
@@ -50,6 +54,7 @@ _kernel32.OpenMutexW.restype = wintypes.HANDLE
 _kernel32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
 _kernel32.CreateFileW.restype = wintypes.HANDLE
 _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+_kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
 
 
 @dataclass(frozen=True)
@@ -72,11 +77,24 @@ def _started(pid: int) -> int | None:
         _kernel32.CloseHandle(handle)
 
 
+def exe_path(pid: int) -> str | None:
+    """the full path of a process's exe, None when windows won't say."""
+    handle = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        size = wintypes.DWORD(1024)
+        path = ctypes.create_unicode_buffer(size.value)
+        return path.value if _kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)) else None
+    finally:
+        _kernel32.CloseHandle(handle)
+
+
 def processes(*names: str) -> list[Process]:
     """the running processes whose exe has one of these names (any case), oldest first."""
     wanted = {name.lower() for name in names}
     snapshot = _kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
-    if snapshot == _INVALID_HANDLE:
+    if snapshot == INVALID_HANDLE:
         raise ctypes.WinError(ctypes.get_last_error())
     found = []
     try:
@@ -103,7 +121,7 @@ def mutex_exists(name: str) -> bool:
 def _open(path: Path, share: int) -> int | None:
     """a handle to an existing file, None when it isn't there; OSError when windows won't open it."""
     handle = _kernel32.CreateFileW(str(path), _GENERIC_READ, share, None, _OPEN_EXISTING, 0, None)
-    if handle == _INVALID_HANDLE:
+    if handle == INVALID_HANDLE:
         error = ctypes.get_last_error()
         if error in (_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND):
             return None

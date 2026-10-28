@@ -168,7 +168,9 @@ buttons and Source's use, and `tools/game/wait_log.py` waits for a line in eithe
 send commands through it too (`-hijack` only finds the game's window on its own desktop):
 `python tools/game/hidden_desktop.py make mc-test` (in the background), then
 `python tools/game/hidden_desktop.py make run MAP=d2_coast_03` and
-`python tools/game/hidden_desktop.py make cmd C="'jpeg a 90'"`; `--list` prints the processes with a window there.
+`python tools/game/hidden_desktop.py make cmd C="'jpeg a 90'"` (`make cmd` alone refuses while the game runs there).
+`--list` prints the processes with a window there, their exes and the titles of their visible windows: a process
+stuck there on a box nobody can click (an error, "only one instance") shows up so, and `taskkill /F /PID <pid>` ends it.
 `taskkill /PID` without `/F` doesn't reach the test client's hidden window there: `--close <pid>` asks it to close
 the way its close button would (it saves its world and quits). gradle runs without its daemon there (one kept from
 that desktop would start the next client there too).

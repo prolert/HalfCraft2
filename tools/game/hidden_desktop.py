@@ -5,7 +5,9 @@ python tools/game/hidden_desktop.py make mc-test                    the test cli
 python tools/game/hidden_desktop.py make run MAP=d2_coast_03        half-life on it too
 python tools/game/hidden_desktop.py make cmd C="'jpeg a 90'"        commands too: -hijack finds the game's window
                                                                     on its own desktop only
-python tools/game/hidden_desktop.py --list                          the processes with a window there
+python tools/game/hidden_desktop.py --list                          the processes with a window there, with their
+                                                                    exes and window titles (a box waiting there for a
+                                                                    click shows up so: taskkill /F /PID ends it)
 python tools/game/hidden_desktop.py --close <pid>                   asks a process there to close, as a click on its
                                                                     window's close button would (taskkill without /F
                                                                     doesn't reach minecraft's hidden window)
@@ -25,10 +27,9 @@ from ctypes import wintypes
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools\, where the halfcraft package is
-from halfcraft import ToolError
+from halfcraft import ToolError, windows
 
-DESKTOP = "HalfCraftTest"
-DESKTOP_ENV = "HALFCRAFT_DESKTOP"  # set for the command: tools/halfcraft/gradle.py runs without a daemon then
+DESKTOP = windows.HIDDEN_DESKTOP
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -77,6 +78,8 @@ _user32.CreateDesktopW.restype = wintypes.HANDLE
 _user32.CloseDesktop.argtypes = (wintypes.HANDLE,)
 _user32.EnumDesktopWindows.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.LPARAM)
 _user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+_user32.InternalGetWindowText.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+_user32.IsWindowVisible.argtypes = (wintypes.HWND,)
 _user32.GetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int)
 _user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 _user32.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
@@ -123,7 +126,7 @@ def _open_desktop() -> int:
 
 def _inheritable(handle: int | None) -> int | None:
     """an inheritable copy of one of this process's standard handles (None when it has none)."""
-    if not handle or handle == ctypes.c_void_p(-1).value:
+    if not handle or handle == windows.INVALID_HANDLE:
         return None
     copy = wintypes.HANDLE()
     process = _kernel32.GetCurrentProcess()
@@ -137,7 +140,7 @@ def run(command: list[str]) -> int:
     desktop = _open_desktop()  # held until the command ends: the desktop goes with its last handle
     std = [_inheritable(_kernel32.GetStdHandle(which)) for which in _STD_HANDLES]
     try:
-        _kernel32.SetEnvironmentVariableW(DESKTOP_ENV, DESKTOP)
+        _kernel32.SetEnvironmentVariableW(windows.HIDDEN_DESKTOP_ENV, DESKTOP)
         startup = _StartupInfo(cb=ctypes.sizeof(_StartupInfo), lpDesktop=DESKTOP, dwFlags=_STARTF_USESTDHANDLES)
         startup.hStdInput, startup.hStdOutput, startup.hStdError = std
         info = _ProcessInformation()
@@ -178,23 +181,49 @@ def windows_on_desktop() -> list[tuple[int, int]]:
     return found
 
 
+def _move_onto_desktop() -> None:
+    """this thread onto the hidden desktop (messages and window texts don't cross desktops). the handle stays open: the
+    thread uses it, and it goes with the process."""
+    desktop = _user32.OpenDesktopW(DESKTOP, 0, False, _GENERIC_ALL)
+    if not desktop:
+        raise ToolError(f"no {DESKTOP} desktop: nothing runs there")
+    if not _user32.SetThreadDesktop(desktop):
+        raise ToolError(f"can't reach {DESKTOP}: {ctypes.WinError(ctypes.get_last_error())}")
+
+
+def _title(window: int) -> str:
+    text = ctypes.create_unicode_buffer(256)
+    _user32.InternalGetWindowText(window, text, len(text))  # sends no message: a hung window answers too
+    return text.value
+
+
+def list_processes() -> None:
+    """prints each process with a window on the hidden desktop: its pid, exe and visible windows' titles."""
+    if not windows_on_desktop():
+        print(f"nothing runs on {DESKTOP}")
+        return
+    _move_onto_desktop()
+    found: dict[int, list[str]] = {}
+    for window, pid in windows_on_desktop():
+        titles = found.setdefault(pid, [])
+        if _user32.IsWindowVisible(window) and (title := _title(window)):
+            titles.append(title)
+    for pid, titles in sorted(found.items()):
+        shown = ", ".join(f"'{title}'" for title in titles) or "no visible window with a title"
+        print(f"{pid} {windows.exe_path(pid) or '?'}: {shown}")
+
+
 def close(pid: int) -> None:
     """posts WM_CLOSE to the process's windows there with a close button that no other window owns: its main ones
-    (minecraft's others are hidden utility, tooltip and ime windows). messages don't cross desktops: this thread moves
-    onto the hidden one first."""
-    desktop = _open_desktop()
-    try:
-        if not _user32.SetThreadDesktop(desktop):
-            raise ToolError(f"can't reach {DESKTOP}: {ctypes.WinError(ctypes.get_last_error())}")
-        asked = 0
-        for window, owner in windows_on_desktop():
-            main = not _user32.GetWindow(window, _GW_OWNER) and _user32.GetWindowLongPtrW(window, _GWL_STYLE) & _WS_SYSMENU
-            if owner == pid and main:
-                if not _user32.PostMessageW(window, _WM_CLOSE, 0, 0):
-                    raise ToolError(f"{pid} wasn't asked to close: {ctypes.WinError(ctypes.get_last_error())}")
-                asked += 1
-    finally:
-        _user32.CloseDesktop(desktop)
+    (minecraft's others are hidden utility, tooltip and ime windows)."""
+    _move_onto_desktop()
+    asked = 0
+    for window, owner in windows_on_desktop():
+        main = not _user32.GetWindow(window, _GW_OWNER) and _user32.GetWindowLongPtrW(window, _GWL_STYLE) & _WS_SYSMENU
+        if owner == pid and main:
+            if not _user32.PostMessageW(window, _WM_CLOSE, 0, 0):
+                raise ToolError(f"{pid} wasn't asked to close: {ctypes.WinError(ctypes.get_last_error())}")
+            asked += 1
     if not asked:
         raise ToolError(f"{pid} has no window with a close button on {DESKTOP}")
     print(f"asked {pid} to close")
@@ -202,13 +231,12 @@ def close(pid: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="run a command on a hidden desktop of its own")
-    parser.add_argument("--list", action="store_true", help="the processes with a window there")
+    parser.add_argument("--list", action="store_true", help="the processes with a window there, with their exes and window titles")
     parser.add_argument("--close", type=int, metavar="PID", help="ask a process there to close")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     options = parser.parse_args()
     if options.list:
-        for pid in sorted({pid for _, pid in windows_on_desktop()}):
-            print(pid)
+        list_processes()
         return 0
     if options.close:
         close(options.close)

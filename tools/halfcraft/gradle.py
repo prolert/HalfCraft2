@@ -7,7 +7,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from halfcraft import REPO, ToolError, commands
+from halfcraft import REPO, ToolError, commands, windows
 from halfcraft.version import version
 
 MINECRAFT = REPO / "minecraft"
@@ -39,7 +39,7 @@ def run(tasks: Sequence[str]) -> None:
     env = {**os.environ, "JAVA_HOME": str(find_jdk())}
     timeout = None if CLIENTS.intersection(tasks) else SECONDS
     command = [MINECRAFT / "gradlew.bat", *tasks, "--no-configuration-cache", f"-Pversion={version()}"]
-    if os.environ.get("HALFCRAFT_DESKTOP"):
+    if os.environ.get(windows.HIDDEN_DESKTOP_ENV):
         # tools/game/hidden_desktop.py's: a daemon started there would start every later client there too
         command.append("--no-daemon")
     commands.run(command, timeout=timeout, what=f"gradle {' '.join(tasks)}", cwd=MINECRAFT, env=env)

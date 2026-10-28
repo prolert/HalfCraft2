@@ -7,12 +7,15 @@ in the game's console.log. useful where typing into the console isn't (synthetic
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools\, where the halfcraft package is
+from hidden_desktop import windows_on_desktop
+
 from halfcraft import ToolError, commands, engines, windows
 
 SECONDS = 15
@@ -50,6 +53,10 @@ def main() -> None:
     if not running:
         raise ToolError("the game isn't running (make run)")
     engine, game = running
+    # -hijack finds the game's window only on its own desktop: from elsewhere the hand-over would start a second game
+    # here, with its "only one instance" box
+    if not os.environ.get(windows.HIDDEN_DESKTOP_ENV) and any(pid == game.pid for _, pid in windows_on_desktop()):
+        raise ToolError(f"the game runs on the {windows.HIDDEN_DESKTOP} desktop: send it through python tools/game/hidden_desktop.py")
     exe = engine.find_exe()
     for command in options.commands:
         send(engine, exe, game, command)
