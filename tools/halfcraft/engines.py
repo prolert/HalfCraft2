@@ -65,9 +65,18 @@ def chosen(engine: str) -> list[Engine]:
 
 
 def running() -> tuple[Engine, windows.Process] | None:
-    """the running source game (halfcraft's or not: only one can run at a time) and its engine, or None."""
-    found = windows.processes(*(engine.exe for engine in ENGINES.values()))
-    if not found:
-        return None
-    game = found[0]
-    return next(engine for engine in ENGINES.values() if engine.exe.lower() == game.name.lower()), game
+    """the running game and its engine, or None: the oldest process of a steam install of one of the engines. another
+    project's hl2.exe (a private-engine build, from some other folder) isn't one: it doesn't load halfcraft's dlls or
+    write its saves, and these tools must never touch it.
+    """
+    installed = {}
+    for engine in ENGINES.values():
+        try:
+            installed[engine.exe.lower()] = engine, engine.find_exe()
+        except ToolError:
+            continue  # not installed, so it isn't running either
+    for process in windows.processes(*installed):  # oldest first
+        engine, exe = installed[process.name.lower()]
+        if windows.runs_exe(process.pid, exe):
+            return engine, process
+    return None

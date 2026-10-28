@@ -21,8 +21,18 @@ SECONDS = 15
 SETTLE_SECONDS = 1.5
 
 
+def leftovers(exe: Path, game: windows.Process, since: int) -> list[windows.Process]:
+    """the instances of this very exe, apart from the game, that started at or after since (windows' ticks): what a hand-over left behind."""
+    return [
+        other
+        for other in windows.processes(exe.name)
+        if other.pid != game.pid and other.started is not None and other.started >= since and windows.runs_exe(other.pid, exe)
+    ]
+
+
 def send(engine: engines.Engine, exe: Path, game: windows.Process, command: str) -> None:
     (engine.game / "cfg/hc_command.cfg").write_bytes(f"{command}\r\n".encode("ascii", errors="replace"))
+    handed_over = windows.now()
     hijack = subprocess.Popen(
         [exe, "-game", engine.game, "-hijack", "+exec", "hc_command"],
         cwd=exe.parent,
@@ -36,10 +46,10 @@ def send(engine: engines.Engine, exe: Path, game: windows.Process, command: str)
         commands.kill_tree(hijack.pid)
         raise ToolError(f"the command '{command}' didn't reach the game") from None
     time.sleep(SETTLE_SECONDS)
-    # a hand-over sometimes leaves a second instance behind with "only one instance" on screen
-    for other in windows.processes(game.name):
-        if other.pid != game.pid:
-            commands.kill_tree(other.pid)
+    # a hand-over sometimes leaves a second instance behind with "only one instance" on screen. only one this hand-over started
+    # goes: another project's hl2.exe (a private-engine build) may run beside the game, and it is no business of these tools
+    for other in leftovers(exe, game, handed_over):
+        commands.kill_tree(other.pid)
 
 
 def main() -> None:

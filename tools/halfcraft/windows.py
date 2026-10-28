@@ -51,6 +51,7 @@ _kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
 _kernel32.OpenProcess.restype = wintypes.HANDLE
 _FILETIME_P = ctypes.POINTER(wintypes.FILETIME)
 _kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE, _FILETIME_P, _FILETIME_P, _FILETIME_P, _FILETIME_P)
+_kernel32.GetSystemTimeAsFileTime.argtypes = (_FILETIME_P,)
 _kernel32.OpenMutexW.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
 _kernel32.OpenMutexW.restype = wintypes.HANDLE
 _kernel32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
@@ -87,6 +88,13 @@ def _started(pid: int) -> int | None:
         _kernel32.CloseHandle(handle)
 
 
+def now() -> int:
+    """the time in windows' 100 ns ticks, the unit of Process.started (both utc)."""
+    ticks = wintypes.FILETIME()
+    _kernel32.GetSystemTimeAsFileTime(ctypes.byref(ticks))
+    return ticks.dwHighDateTime << 32 | ticks.dwLowDateTime
+
+
 def exe_path(pid: int) -> str | None:
     """the full path of a process's exe, None when windows won't say."""
     handle = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
@@ -98,6 +106,12 @@ def exe_path(pid: int) -> str | None:
         return path.value if _kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)) else None
     finally:
         _kernel32.CloseHandle(handle)
+
+
+def runs_exe(pid: int, exe: Path) -> bool:
+    """whether a process runs this very exe (not just one of its name): the paths resolved, case aside. False when windows won't give its path."""
+    path = exe_path(pid)
+    return path is not None and str(Path(path).resolve()).lower() == str(exe.resolve()).lower()
 
 
 def open_hidden_desktop(*, create: bool) -> int | None:

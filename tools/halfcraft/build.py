@@ -13,8 +13,8 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from halfcraft import REPO, ToolError, commands, game_folder, sdk, shaders, version, visual_studio, windows
-from halfcraft.engines import ENGINES, Engine
+from halfcraft import REPO, ToolError, commands, game_folder, sdk, shaders, version, visual_studio
+from halfcraft.engines import ENGINES, Engine, running
 
 LOGS = REPO / "build/logs"
 VPC_SECONDS = 600
@@ -194,8 +194,9 @@ def build(engines: list[Engine], *, projects: bool = True, launcher: bool = True
     """builds the engines' dlls, the shaders, their dev game folders and (launcher) HalfCraft.exe.
     projects: run vpc first (skip it when no .vpc file changed).
     """
-    if running := windows.processes(*(engine.exe for engine in ENGINES.values())):
-        raise ToolError(f"close the game first ({', '.join(process.name for process in running)} runs): its dlls get replaced")
+    # only the steam install of an engine loads these dlls: another project's hl2.exe doesn't hold the build up
+    if game := running():
+        raise ToolError(f"close the game first ({game[1].name} runs): its dlls get replaced")
     chain = toolchain(configuration)
     LOGS.mkdir(parents=True, exist_ok=True)
     # the shaders and the game folders' campaign files come from source-sdk-2013 whichever engine is built:
