@@ -150,6 +150,8 @@ namespace halfcraft
 			return true;
 		}
 
+		bool g_client_in_level = false;  // HalfCraft_ClientInLevel
+
 		float distance(const float a[3], const float b[3])
 		{
 			const float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
@@ -199,6 +201,10 @@ namespace halfcraft
 				level_loaded_ = true;
 				dig_level_loaded();
 			}
+
+			// the level's entities come after this and are gone before LevelShutdownPostEntity (hc_bridge.h)
+			void LevelInitPreEntity() override { g_client_in_level = true; }
+			void LevelShutdownPostEntity() override { g_client_in_level = false; }
 
 		private:
 			void update(float frametime);
@@ -659,4 +665,10 @@ extern "C" __declspec(dllexport) int HalfCraft_TakeNewGame()
 	const bool asked = g_new_game_asked;
 	g_new_game_asked = false;
 	return asked ? 1 : 0;
+}
+
+// server.dll, as a map loads: whether this client still has a level's entities (hc_bridge.h)
+extern "C" __declspec(dllexport) int HalfCraft_ClientInLevel()
+{
+	return halfcraft::g_client_in_level ? 1 : 0;
 }

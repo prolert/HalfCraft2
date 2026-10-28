@@ -32,11 +32,19 @@ content is mounted over Half-Life 2's, and New Game lists all chapters, numbered
 1-14, Episode One's 15-19, Episode Two's 20-26), all unlocked from the start. Each campaign keeps its
 own skill values (`source/src/server/hc_campaign.cpp`). Lost Coast, which Half-Life 2 installs into
 its folder, is chapter 27. Its content is mounted last, so its copies of shared files don't cover the
-campaigns'. On its map, `source/src/server/hc_lost_coast.cpp` loads its own `scenes.image`. Episode
-Two's `blackout.mdl`, the first-person knockout rig, has none of the animations Half-Life 2, Episode One
-and Lost Coast play on it (Half-Life 2's d1_trainstation_04 and Lost Coast's intro wait for its get-up),
-so off Episode Two's maps `source/src/server/hc_blackout.cpp` puts Episode One's, which has them all,
-first. The game folders are put together by `tools/halfcraft/game_folder.py` from hl2dm-sp's campaign folders.
+campaigns'. On its map, `source/src/server/hc_lost_coast.cpp` loads its own `scenes.image`. The
+campaigns ship their own versions of some characters under the same names, each with the animation
+models it includes: Alyx, the G-Man, Dog, Kleiner, Lamarr, the vortigaunts, the dropship, the advisor,
+the stalker, the classic zombie and the first-person knockout rig (Episode Two's Alyx has none of Half-Life
+2's gestures, nor its vending machine; its knockout rig none of the get-ups d1_trainstation_04 and Lost
+Coast's intro wait for). Each campaign's maps play its own: as a level of another campaign than the last
+one loads, `source/src/server/hc_campaign_models.cpp` copies that campaign's versions from its own content
+into the game folder, which is searched first (Half-Life 2's or Episode One's, about 20 MB; Lost Coast gets
+Half-Life 2's and its own soldiers' aiming animations), or takes them out on Episode Two's maps, whose
+merged content is its own; `halfcraft-campaign-models.txt` in the game folder says which are there, and the
+log names each character's version as a map loads. `python tools/game/campaign_models.py` checks the
+models it copies against the installed games (run it after Valve updates them). The game folders are put
+together by `tools/halfcraft/game_folder.py` from hl2dm-sp's campaign folders.
 
 ## Layout
 
@@ -146,7 +154,7 @@ overbright), `hc_torch_light` / `hc_torch_light_count` (Minecraft's lights on th
 ones dug stay dug); for debugging `hc_debug_blocks 1` (outline the blocks'
 collision), `hc_debug_drop 1` (drop a watermelon onto the blocks), `hc_debug_use 1` (log what use
 finds), `hc_debug_torch` (a torch light where you look, without Minecraft), `hc_debug_voxels [regions]` (Minecraft's
-collision voxels around the player checked against Source's own collision), `hc_debug_dig_material` (the dig material of the world brush you look at), `hc_debug_dig 1` (outline the cells dug out of Half-Life's walls near the player in orange and the pieces the world's brushes were cut into around them in blue), `hc_debug_dig_cell [<x> <y> <z> [1|0]]` (dig a cell out of Half-Life's walls without Minecraft, or fill it again with 0; without the Minecraft block coordinates, the wall you look at), `hc_debug_dig_pvs 1` (log what the holes near the player add to its PVS), `hc_debug_dig_mask 1` (log each time the dig mask moves to the player: laid out and uploaded again, or its layout alone when no cell is dug in it before or after), `hc_debug_dig_mask_dump [name]` (read the dig mask's texture back from the gpu, log its layers with cells dug against client.dll's image of the same frame, and write it to `<name>.tga` in the game folder; the next frame with the hud shows the mask over its top left corner), `hc_debug_dig_clip 1|2` (for a hole drawn uncut: 1 makes every pixel of the shader dll's world shaders read the mask's first texel, made dug, whatever its world position; 2 cuts every such pixel without reading the mask; 0 lays the mask out again), and the commands `hc_look <pitch> <yaw>`, `hc_click <1|2|3>`, `hc_scroll <notches>`, `hc_press <key> <1|0> [seconds]` (a key or mouse button the way the real one goes, so a weapon held in Minecraft fires) and `hc_weapons` (the player's weapons as Minecraft gets them). `make cmd C="'save test' 'load test'"`
+collision voxels around the player checked against Source's own collision), `hc_debug_dig_material` (the dig material of the world brush you look at), `hc_debug_dig 1` (outline the cells dug out of Half-Life's walls near the player in orange and the pieces the world's brushes were cut into around them in blue), `hc_debug_dig_cell [<x> <y> <z> [1|0]]` (dig a cell out of Half-Life's walls without Minecraft, or fill it again with 0; without the Minecraft block coordinates, the wall you look at), `hc_debug_dig_pvs 1` (log what the holes near the player add to its PVS), `hc_debug_dig_mask 1` (log each time the dig mask moves to the player: laid out and uploaded again, or its layout alone when no cell is dug in it before or after), `hc_debug_dig_mask_dump [name]` (read the dig mask's texture back from the gpu, log its layers with cells dug against client.dll's image of the same frame, and write it to `<name>.tga` in the game folder; the next frame with the hud shows the mask over its top left corner), `hc_debug_dig_clip 1|2` (for a hole drawn uncut: 1 makes every pixel of the shader dll's world shaders read the mask's first texel, made dug, whatever its world position; 2 cuts every such pixel without reading the mask; 0 lays the mask out again), `hc_debug_model <targetname or classname> [sequence ...]` (an entity's model, its version's checksum and its sequence count, and whether it has the sequences named), and the commands `hc_look <pitch> <yaw>`, `hc_click <1|2|3>`, `hc_scroll <notches>`, `hc_press <key> <1|0> [seconds]` (a key or mouse button the way the real one goes, so a weapon held in Minecraft fires) and `hc_weapons` (the player's weapons as Minecraft gets them). `make cmd C="'save test' 'load test'"`
 sends console commands to the running game, and `python tools/debug/read_dump.py <dump> <folder with the pdbs>`
 names where a crash dump died: `build/game-hl2/bin` for `hl2.exe`, `build/game-hl2dm/bin/x64` for
 `hl2mp_win64.exe` (Steam keeps the dumps in `Steam/dumps`).

@@ -48,8 +48,11 @@
 			// each campaign's own content once more, for the files they all have under one name:
 			// client.dll reads titles.txt and credits.txt of the map's campaign from here
 			// (hc_campaign_text.cpp); server.dll copies lost coast's scenes.image on its map
-			// (hc_lost_coast.cpp)
+			// (hc_lost_coast.cpp) and the characters a map's campaign plays into the game folder
+			// (hc_campaign_models.cpp). half-life 2's loose folder comes before its pak: titles.txt
+			// and credits.txt are loose, its characters in the pak
 			hc_hl2				|all_source_engine_paths|hl2
+			hc_hl2				|all_source_engine_paths|hl2/hl2_misc.vpk
 			hc_ep1				|all_source_engine_paths|episodic/ep1_pak.vpk
 			hc_ep2				|all_source_engine_paths|ep2/ep2_pak.vpk
 			hc_lc				|all_source_engine_paths|lostcoast/lostcoast_pak.vpk

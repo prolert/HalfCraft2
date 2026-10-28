@@ -23,6 +23,8 @@
 //            refused (the player movement, hc_movement.cpp); the client sends minecraft's player there
 //   new games - the menu's chapter cfgs run the client's hc_new_game before their map; the server
 //            asks as the map loads, which tells a new game from a `map` typed into the console
+//   in level - whether the client still has a level's entities; the server changes the characters'
+//            model files only when it hasn't (hc_campaign_models.cpp)
 
 #include <cstdint>
 
@@ -139,4 +141,13 @@ namespace halfcraft
 	using TakeNewGameFn = int (*)();
 
 	inline constexpr char HC_TAKE_NEW_GAME_EXPORT[] = "HalfCraft_TakeNewGame";
+
+	/// server.dll -> client.dll, as a map loads: whether the client has a level's entities (from its
+	/// LevelInitPreEntity until its LevelShutdownPostEntity). they point into the model cache's data,
+	/// so the server changes no model files then (a changelevel across campaigns, if the client stays
+	/// in the old level until the new one spawns).
+	/// @return nonzero: it has
+	using ClientInLevelFn = int (*)();
+
+	inline constexpr char HC_CLIENT_IN_LEVEL_EXPORT[] = "HalfCraft_ClientInLevel";
 }
