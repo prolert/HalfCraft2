@@ -128,8 +128,16 @@ namespace halfcraft
 		return true;
 	}
 
-	/// one section's cells into the mask's image: each of its 16 layers is a square of 16 x 16 texels, red 255 where a
-	/// cell is dug and 0 where not (green, blue and alpha 0).
+	/// whether a texel of the mask says its cell is dug, as DigClip reads it: red without blue. a texture the material system
+	/// may bind instead of the mask (its error texture's pink and black, white, grey, black) cuts nothing.
+	/// @param red, blue - the texel's red and blue, 0..255 (the shader's 0..1 times 255)
+	inline bool mask_texel_dug(std::uint8_t red, std::uint8_t blue)
+	{
+		return red >= 192 && blue <= 63;  // the shader's step( 0.75, r ) * step( b, 0.25 )
+	}
+
+	/// one section's cells into the mask's image: each of its 16 layers is a square of 16 x 16 texels, (255, 0, 0, 0) where
+	/// a cell is dug (mask_texel_dug) and all zeros where not.
 	/// @param sx, sy, sz - the section (minecraft section coords: its blocks start at 16 times them)
 	/// @param bits - its 512 bytes, bit x + 16z + 256y; nullptr: nothing dug in it
 	/// @param rgba - the image, DigMaskLayout::TEXTURE texels square

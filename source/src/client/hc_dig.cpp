@@ -50,6 +50,9 @@ namespace halfcraft
 		ConVar hc_dig("hc_dig", "1", FCVAR_ARCHIVE, "halfcraft: 0 - minecraft digs no new cells out of half-life's walls (the ones dug stay dug)");
 		ConVar hc_debug_dig_mask("hc_debug_dig_mask", "0", 0,
 			"halfcraft: log each time the dig mask moves to the player: laid out and uploaded again, or its layout alone (no cell dug in it before or after)");
+		ConVar hc_debug_dig_clip("hc_debug_dig_clip", "0", 0,
+			"halfcraft: for a hole drawn uncut: 1 - every pixel the shader dll's world shaders draw reads the dig mask's first texel, made dug (where the "
+			"pixel is doesn't matter); 2 - every such pixel is cut without the mask read; 0 - the mask laid out again as it is");
 
 		// r_novis and r_portalsopenall as they were before force_vis turned them on
 		bool g_vis_forced = false;
@@ -101,6 +104,7 @@ namespace halfcraft
 			bool                      built = false;
 			bool                      dug = false;       // the image may have a texel dug (mask_needs_rebuild's image_dug)
 			bool                      clipping = false;  // the shader dll has the texture: a cell is dug in the mask
+			int                       debug_clip = 0;    // hc_debug_dig_clip, as the mask last had it
 			std::uint32_t             version = 0;       // the store's, as the mask has it
 			DigMaskState              state{};
 			std::vector<DugSection>   sections;  // dug_since's, kept for the next call
@@ -358,15 +362,15 @@ namespace halfcraft
 			readback->done.store(true, std::memory_order_release);
 		}
 
-		/// a texel's red in the mask's image (rgba) and in what the gpu gave back (rgb)
+		/// whether a texel says its cell is dug (mask_texel_dug) in the mask's image (rgba) and in what the gpu gave back (rgb)
 		bool image_texel_dug(const MaskReadback& r, std::size_t texel)
 		{
-			return r.image[texel * TEXEL_BYTES] != 0;
+			return mask_texel_dug(r.image[texel * TEXEL_BYTES], r.image[texel * TEXEL_BYTES + 2]);
 		}
 
 		bool texture_texel_dug(const MaskReadback& r, std::size_t texel)
 		{
-			return r.pixels[texel * 3] > 127;  // the shader's 0.5
+			return mask_texel_dug(r.pixels[texel * 3], r.pixels[texel * 3 + 2]);
 		}
 
 		/// a read-back mask compared with the image it should have, layer by layer (logged), and written to <name>.tga
@@ -531,6 +535,32 @@ namespace halfcraft
 			}
 		}
 
+		/// hc_debug_dig_clip: the shader dll clips by the mask whatever is dug, every pixel at the mask's first cell (c20.w 0):
+		/// 1 with that texel dug, 2 without reading the mask (c21.w 2). a hole drawn uncut in a view: still uncut at 1, the
+		/// world position the vertex shader gives isn't what the pixel shader gets; cut at 2 alone, s15 doesn't hold the
+		/// mask; uncut at 2, the constants don't reach the pixel shader or another one draws there
+		void debug_clip(DigMask& m)
+		{
+			const int mode = hc_debug_dig_clip.GetInt();
+			if (mode != m.debug_clip) {
+				if (m.debug_clip == 1) {
+					rebuild_mask(m);  // the first texel back as it is
+				}
+				m.debug_clip = mode;
+			}
+			if (mode != 1 && mode != 2) {
+				return;
+			}
+			if (mode == 1 && !mask_texel_dug(m.rgba[0], m.rgba[2])) {
+				const std::uint8_t dug[TEXEL_BYTES] = { 255, 0, 0, 0 };  // write_section's
+				std::memcpy(m.rgba.data(), dug, sizeof(dug));
+				m.texture.update_region(0, 0, 1, 1, dug);
+			}
+			m.state.texture = m.texture.texture();
+			m.state.origin[3] = 0.0f;  // every pixel in cell (0, 0, 0): texel (0, 0)
+			m.state.layout[3] = static_cast<float>(mode);
+		}
+
 		/// the mask follows the store; without the shader dll it's all zeros. the shader dll clips by it only while a cell
 		/// is dug in it, whatever hc_dig says: with none, it gets no texture and clips nothing, whatever the gpu holds of
 		/// it (on d2_coast_01, with no cell dug on the map, cliffs were cut in 40-unit layers: the texture sampled had
@@ -570,6 +600,7 @@ namespace halfcraft
 			m.clipping = dug;
 			m.state.texture = dug ? m.texture.texture() : nullptr;
 			m.layout.shader_constants(current_slot(), m.state.origin, m.state.layout);
+			debug_clip(m);
 			return dug;
 		}
 	}

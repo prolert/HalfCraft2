@@ -809,7 +809,9 @@ namespace
 		CHECK(red(131, 133) == 255);  // cell (3139, 41, -107)
 		const std::size_t texel = (133 * 1024 + 131) * 4;
 		CHECK(rgba[texel + 1] == 0 && rgba[texel + 2] == 0 && rgba[texel + 3] == 0);
+		CHECK(mask_texel_dug(rgba[texel], rgba[texel + 2]));
 		CHECK(red(132, 133) == 0 && red(131, 134) == 0 && red(3, 5) == 0);
+		CHECK(!mask_texel_dug(red(132, 133), rgba[(133 * 1024 + 132) * 4 + 2]));
 
 		// no mask: nothing dug in the section
 		CHECK(write_section(layout, 196, 2, -7, nullptr, rgba.data()));
@@ -818,6 +820,16 @@ namespace
 		// a section outside the layout writes nothing
 		CHECK(!write_section(layout, 195, 2, -7, bits, rgba.data()));
 		CHECK(std::all_of(rgba.begin(), rgba.end(), [](std::uint8_t byte) { return byte == 0; }));
+	}
+
+	void test_dig_mask_texel_dug()
+	{
+		CHECK(mask_texel_dug(255, 0));  // write_section's dug cell
+		CHECK(!mask_texel_dug(0, 0));   // not dug, and the black texture
+		// what the material system may bind instead of the mask cuts nothing: its error texture's pink, white, grey
+		CHECK(!mask_texel_dug(255, 255));
+		CHECK(!mask_texel_dug(128, 128));
+		CHECK(!mask_texel_dug(191, 0) && mask_texel_dug(192, 63) && !mask_texel_dug(192, 64));  // the shader's 0.75 and 0.25
 	}
 
 	void test_dig_mask_has_section()
@@ -1047,6 +1059,7 @@ int run_tests()
 	test_dig_mask_layout_places_the_cells_in_the_texture();
 	test_dig_mask_shader_texel();
 	test_dig_mask_write_section();
+	test_dig_mask_texel_dug();
 	test_dig_mask_has_section();
 	test_dig_mask_needs_rebuild();
 	test_dig_mask_upload_before_clip();

@@ -858,18 +858,18 @@ index 00000000..a7c4d0ec
 +}
 diff --git a/src/materialsystem/stdshaders/hc_dig_clip_fxc.h b/src/materialsystem/stdshaders/hc_dig_clip_fxc.h
 new file mode 100644
-index 00000000..b51b4b8b
+index 00000000..72f2cb67
 --- /dev/null
 +++ b/src/materialsystem/stdshaders/hc_dig_clip_fxc.h
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,22 @@
 +// halfcraft: the cells minecraft dug out of half-life's walls, left undrawn by the world shaders of
 +// game_shader_generic_halfcraft.dll (hc_lightmappedgeneric_ps2_3_x.h and hc_flashlight_ps2x.fxc call DigClip first).
 +// the dll binds client.dll's mask (source/src/shaders/hc_shader_dig.cpp); source/src/core/hc_dig_mask.h lays it out,
-+// and its shader_texel is this arithmetic in c++, tested there
++// and its shader_texel and mask_texel_dug are this arithmetic in c++, tested there
 +
 +sampler DigMaskSampler : register( s15 );	// halfcraft: client.dll's mask of dug cells (client/hc_dig.cpp)
 +const float4 g_DigOrigin : register( c20 );
-+const float4 g_DigLayout : register( c21 );
++const float4 g_DigLayout : register( c21 );	// .w: 0 off, 1 on, 2 every pixel in the mask cut (hc_debug_dig_clip 2)
 +void DigClip( float3 worldPos, float3 eyePos )
 +{
 +	float3 p = worldPos + normalize( worldPos - eyePos ) * 0.5f;	// a face belongs to the cell behind it (HostRay.surfaceCell)
@@ -877,7 +877,12 @@ index 00000000..b51b4b8b
 +	float inside = all( cell >= 0 ) && all( cell < float3( g_DigLayout.y, g_DigLayout.y, g_DigLayout.y * 0.5f ) );
 +	float row = floor( cell.z / g_DigLayout.z );
 +	float2 uv = ( float2( cell.z - row * g_DigLayout.z, row ) * g_DigLayout.y + cell.xy + 0.5f ) * g_DigLayout.x;
-+	clip( 0.5f - tex2D( DigMaskSampler, uv ).r * inside * g_DigLayout.w );
++	float4 texel = tex2D( DigMaskSampler, uv );
++	// a dug cell is red without blue (mask_texel_dug): no stand-in texture the material system may bind instead of
++	// the mask cuts anything, not error's pink, nor white, grey or black
++	float dug = step( 0.75f, texel.r ) * step( texel.b, 0.25f );
++	dug = max( dug, step( 1.5f, g_DigLayout.w ) );	// hc_debug_dig_clip 2: cut without reading the mask
++	clip( 0.5f - dug * inside * g_DigLayout.w );
 +}
 diff --git a/src/materialsystem/stdshaders/hc_flashlight_dx9.cpp b/src/materialsystem/stdshaders/hc_flashlight_dx9.cpp
 new file mode 100644
