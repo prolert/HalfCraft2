@@ -155,6 +155,17 @@ console they're let go as it closes), `hc_key <SDL scancode> [1|0] [seconds]`,
 `hc_hold <mouse button> <1|0> [seconds]` and `hc_use <1|0> [seconds]` press Minecraft's keys and
 buttons and Source's use, and `tools/game/wait_log.py` waits for a line in either game's log.
 
+`python tools/game/hidden_desktop.py <command>` runs a command on a Windows desktop of its own that nobody sees
+(`HalfCraftTest`), so a test's games take neither the screen nor the keyboard and mouse: both games draw there
+(Half-Life's d3d9, Minecraft's opengl), link up, and `jpeg` writes what Half-Life drew. Start both through it, and
+send commands through it too (`-hijack` only finds the game's window on its own desktop):
+`python tools/game/hidden_desktop.py make mc-test` (in the background), then
+`python tools/game/hidden_desktop.py make run MAP=d2_coast_03` and
+`python tools/game/hidden_desktop.py make cmd C="'jpeg a 90'"`; `--list` prints the processes with a window there.
+`taskkill /PID` without `/F` doesn't reach the test client's hidden window there: `--close <pid>` asks it to close
+the way its close button would (it saves its world and quits). gradle runs without its daemon there (one kept from
+that desktop would start the next client there too).
+
 ## Not done yet
 
 - multiplayer
