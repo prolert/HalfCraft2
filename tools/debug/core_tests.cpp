@@ -1442,33 +1442,90 @@ namespace
 		plan.files.push_back({ "models/combine_soldier_anims.mdl", "hc_lc", std::vector<std::uint8_t>(70, 3) });
 		CampaignModelState old;
 		old.set = ModelSet::kHalfLife2;
-		old.files.push_back({ "models/alyx.mdl", 100, "hc_hl2", 100 });           // the same, there: stays
-		old.files.push_back({ "models/alyx.vvd", 50, "hc_hl2", 50 });             // the same, but the folder's isn't: comes again
+		old.files.push_back({ "models/alyx.mdl", 100, "hc_hl2", 100 });
+		old.files.push_back({ "models/alyx.vvd", 50, "hc_hl2", 50 });
 		old.files.push_back({ "models/gman.mdl", 30, "hc_hl2", 30 });             // not wanted: goes
 		old.files.push_back({ "models/from_older_lists.mdl", 9, "hc_hl2", 9 });  // of an older list: goes too
-		std::map<std::string, long> folder{ { "models/alyx.mdl", 100 }, { "models/alyx.vvd", 49 }, { "models/gman.mdl", 30 },
-			{ "models/from_older_lists.mdl", 9 }, { "models/dog.ani", 5 } };  // dog.ani: a stray
-		const auto                  size = [&folder](const std::string& name) {
-			const auto found = folder.find(name);
-			return found == folder.end() ? -1L : found->second;
+		std::map<std::string, std::vector<std::uint8_t>> folder{
+			{ "models/alyx.mdl", std::vector<std::uint8_t>(100, 1) },  // the plan's bytes: stays
+			{ "models/alyx.vvd", std::vector<std::uint8_t>(50, 9) },   // the plan's size, other bytes (a valve update): comes again
+			{ "models/gman.mdl", std::vector<std::uint8_t>(30, 1) },
+			{ "models/from_older_lists.mdl", std::vector<std::uint8_t>(9, 1) },
+			{ "models/dog.ani", std::vector<std::uint8_t>(5, 1) },  // a stray
 		};
-		const auto swap = plan_campaign_model_swap(old, true, plan, size);
+		int                       reads = 0;
+		const CampaignModelFolder view{
+			[&folder](const std::string& name) {
+				const auto found = folder.find(name);
+				return found == folder.end() ? -1L : static_cast<long>(found->second.size());
+			},
+			[&folder, &reads](const std::string& name, const std::vector<std::uint8_t>& data) {
+				++reads;
+				const auto found = folder.find(name);
+				return found != folder.end() && found->second == data;
+			},
+		};
+		const auto swap = plan_campaign_model_swap(old, plan, view);
 		CHECK(swap.keep == std::vector<std::string>({ "models/alyx.mdl" }));
 		CHECK(swap.write == std::vector<std::size_t>({ 1, 2 }));
+		CHECK(reads == 2);  // only the files of the plan's size are read
 		auto removed = swap.remove;
 		std::sort(removed.begin(), removed.end());
 		CHECK(removed == std::vector<std::string>({ "models/alyx.vvd", "models/dog.ani", "models/from_older_lists.mdl", "models/gman.mdl" }));
 
-		// a state of other lists keeps nothing: everything there goes, everything wanted comes
-		const auto untrusted = plan_campaign_model_swap(old, false, plan, size);
-		CHECK(untrusted.keep.empty() && untrusted.write.size() == 3 && untrusted.remove.size() == 5);
-		// lost coast after half-life 2: the same source and size of a file is the same file
-		CampaignModelState other_source = old;
-		other_source.files[0].source = "hc_ep1";
-		CHECK(plan_campaign_model_swap(other_source, true, plan, size).keep.empty());
-		// no state at all: whatever of the lists is there goes
-		const auto unknown = plan_campaign_model_swap(std::nullopt, false, plan, size);
-		CHECK(unknown.keep.empty() && unknown.remove.size() == 4 && unknown.write.size() == 3);  // not from_older_lists: no name for it
+		// no state at all: whatever of the lists is there goes but what's byte for byte the plan's
+		const auto unknown = plan_campaign_model_swap(std::nullopt, plan, view);
+		CHECK(unknown.keep == std::vector<std::string>({ "models/alyx.mdl" }) && unknown.remove.size() == 3 && unknown.write.size() == 2);
+		// another campaign's file of the same size (alyx.mdl is 480,536 bytes in all three) goes
+		folder["models/alyx.mdl"] = std::vector<std::uint8_t>(100, 7);
+		CHECK(plan_campaign_model_swap(old, plan, view).keep.empty());
+	}
+
+	void test_campaign_model_restore()
+	{
+		ModelSetPlan plan;  // episode one's alyx
+		plan.files.push_back({ "models/alyx.mdl", "hc_ep1", std::vector<std::uint8_t>(100, 21) });
+		plan.files.push_back({ "models/alyx.vvd", "hc_ep1", std::vector<std::uint8_t>(50, 21) });
+		plan.files.push_back({ "models/alyx_gestures.mdl", "hc_ep1", std::vector<std::uint8_t>(70, 21) });
+		plan.files.push_back({ "models/alyx_gestures.ani", "hc_ep1", std::vector<std::uint8_t>(40, 21) });
+		CampaignModelState old;  // half-life 2's
+		old.set = ModelSet::kHalfLife2;
+		old.files.push_back({ "models/alyx.mdl", 100, "hc_hl2", 100 });
+		old.files.push_back({ "models/alyx.vvd", 50, "hc_hl2", 50 });
+		old.files.push_back({ "models/alyx_gestures.mdl", 60, "hc_hl2", 60 });
+		old.files.push_back({ "models/alyx_gestures.ani", 30, "hc_hl2", 30 });
+		old.files.push_back({ "models/dog.mdl", 10, "hc_hl2", 10 });
+		// what a swap that stopped halfway left: half-life 2's alyx_gestures.ani (held open), episode one's alyx.vvd
+		// (written, then held), and a stray nobody knows
+		std::map<std::string, std::vector<std::uint8_t>> folder{
+			{ "models/alyx_gestures.ani", std::vector<std::uint8_t>(30, 2) },
+			{ "models/alyx.vvd", std::vector<std::uint8_t>(50, 21) },
+			{ "models/kleiner.ani", std::vector<std::uint8_t>(3, 3) },
+		};
+		const CampaignModelFolder view{
+			[&folder](const std::string& name) {
+				const auto found = folder.find(name);
+				return found == folder.end() ? -1L : static_cast<long>(found->second.size());
+			},
+			[&folder](const std::string& name, const std::vector<std::uint8_t>& data) {
+				const auto found = folder.find(name);
+				return found != folder.end() && found->second == data;
+			},
+		};
+		const std::vector<std::string> leftovers{ "models/alyx.vvd", "models/alyx_gestures.ani", "models/kleiner.ani" };
+		const auto                     restore = plan_campaign_model_restore(leftovers, old, plan, view);
+		const auto                     find = [&restore](const std::string& name) {
+			return std::find_if(restore.begin(), restore.end(), [&name](const CampaignModelRestore& file) { return file.name == name; });
+		};
+		CHECK(restore.size() == 2);
+		// alyx's leftover is episode one's: the plan's .mdl comes back
+		CHECK(find("models/alyx.mdl") != restore.end() && find("models/alyx.mdl")->plan_file == std::optional<std::size_t>(0));
+		// alyx_gestures' leftover is half-life 2's: its .mdl comes back from hc_hl2
+		CHECK(find("models/alyx_gestures.mdl") != restore.end() && !find("models/alyx_gestures.mdl")->plan_file &&
+			find("models/alyx_gestures.mdl")->source == "hc_hl2" && find("models/alyx_gestures.mdl")->size == 60);
+		// a stray of a model neither knows stays as it is; dog, with nothing left, needs nothing
+		CHECK(find("models/kleiner.mdl") == restore.end() && find("models/dog.mdl") == restore.end());
+		CHECK(plan_campaign_model_restore({}, old, plan, view).empty());
 	}
 }
 
@@ -1510,6 +1567,7 @@ int run_tests()
 	test_campaign_model_state();
 	test_stale_campaign_models();
 	test_campaign_model_swap();
+	test_campaign_model_restore();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;

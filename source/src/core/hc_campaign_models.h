@@ -912,9 +912,17 @@ namespace halfcraft
 		return std::nullopt;
 	}
 
-	/// how a swap changes the game folder: the plan's files it already holds as written (same name, source and size,
-	/// by a state written under today's lists), which stay; the files there that go (every name a plan may write, and
-	/// the state's, but those that stay); the plan's files that come
+	/// the game folder as a swap sees it
+	struct CampaignModelFolder
+	{
+		/// a file's size there, -1 when it isn't there
+		std::function<long(const std::string&)> size;
+		/// whether the file there has exactly these bytes (read only for a file of the same size)
+		std::function<bool(const std::string&, const std::vector<std::uint8_t>&)> holds;
+	};
+
+	/// how a swap changes the game folder: the plan's files it already holds byte for byte, which stay; the files there
+	/// that go (every name a plan may write, and the old state's, but those that stay); the plan's files that come
 	struct CampaignModelSwap
 	{
 		std::vector<std::string> keep;
@@ -922,21 +930,13 @@ namespace halfcraft
 		std::vector<std::size_t> write;  // indices into the plan's files
 	};
 
-	/// @param old - the state the folder had, if any; its files stay only when trusted (its lists are today's)
-	/// @param folder_size - a file's size in the game folder, -1 when it isn't there
-	inline CampaignModelSwap plan_campaign_model_swap(const std::optional<CampaignModelState>& old, bool trusted, const ModelSetPlan& plan,
-		const std::function<long(const std::string&)>& folder_size)
+	/// @param old - the state the folder had, if any: the names of its files go too (they may be from older lists)
+	inline CampaignModelSwap plan_campaign_model_swap(const std::optional<CampaignModelState>& old, const ModelSetPlan& plan, const CampaignModelFolder& folder)
 	{
 		CampaignModelSwap swap;
 		for (std::size_t i = 0; i < plan.files.size(); ++i) {
 			const PlannedFile& file = plan.files[i];
-			bool               stays = false;
-			if (old && trusted) {
-				for (const CampaignModelFile& had : old->files) {
-					stays = stays || (had.name == file.name && had.source == file.source && had.size == static_cast<long>(file.data.size()));
-				}
-			}
-			if (stays && folder_size(file.name) == static_cast<long>(file.data.size())) {
+			if (folder.size(file.name) == static_cast<long>(file.data.size()) && folder.holds(file.name, file.data)) {
 				swap.keep.push_back(file.name);
 			} else {
 				swap.write.push_back(i);
@@ -950,10 +950,54 @@ namespace halfcraft
 			}
 		}
 		for (const std::string& name : candidates) {
-			if (seen.insert(name).second && folder_size(name) >= 0) {
+			if (seen.insert(name).second && folder.size(name) >= 0) {
 				swap.remove.push_back(name);
 			}
 		}
 		return swap;
+	}
+
+	/// a file to put back after a swap stopped halfway: the plan's (by its index), or the old state's (from its source)
+	struct CampaignModelRestore
+	{
+		std::string                name;
+		std::optional<std::size_t> plan_file;
+		std::string                source;  // the old state's file's, when not the plan's
+		long                       size = 0;
+	};
+
+	/// after a swap that stopped halfway and couldn't take every copy out: the files that make each model whose files
+	/// are left whole again, in the version its leftovers are. a leftover with the plan's bytes brings the rest of the
+	/// plan's files of its model back; otherwise the old state's files of that model come back from their sources. a model
+	/// neither has files of stays as it is.
+	inline std::vector<CampaignModelRestore> plan_campaign_model_restore(const std::vector<std::string>& leftovers, const std::optional<CampaignModelState>& old,
+		const ModelSetPlan& plan, const CampaignModelFolder& folder)
+	{
+		std::vector<CampaignModelRestore> restore;
+		for (const std::string& model : models_of_files(leftovers)) {
+			bool planned_version = false;
+			for (const std::string& left : leftovers) {
+				for (const PlannedFile& file : plan.files) {
+					planned_version = planned_version ||
+						(file.name == left && model_of_file(left) == model && folder.size(left) == static_cast<long>(file.data.size()) && folder.holds(left, file.data));
+				}
+			}
+			if (planned_version) {
+				for (std::size_t i = 0; i < plan.files.size(); ++i) {
+					if (model_of_file(plan.files[i].name) == model && folder.size(plan.files[i].name) < 0) {
+						restore.push_back({ plan.files[i].name, i, {}, static_cast<long>(plan.files[i].data.size()) });
+					}
+				}
+				continue;
+			}
+			if (old) {
+				for (const CampaignModelFile& file : old->files) {
+					if (model_of_file(file.name) == model && folder.size(file.name) < 0) {
+						restore.push_back({ file.name, std::nullopt, file.source, file.size });
+					}
+				}
+			}
+		}
+		return restore;
 	}
 }
