@@ -238,6 +238,7 @@ public final class WorldExporter {
 		int walls = 0;
 		WALLS.level = level;
 		WALLS.unknown = false;
+		WALLS.cut = 0;
 		if (empty && !SENT.contains(key) && !LIT.contains(key) && !SOLID.contains(key) && dugCount == 0 && !DUG.contains(key)) {
 			return false; // nothing there and nothing to remove
 		}
@@ -358,7 +359,8 @@ public final class WorldExporter {
 					} else {
 						DUG.remove(key);
 					}
-					HalfCraft.LOG.info("HalfCraft: sent {} dug cells of section {} {} {} to Half-Life ({} wall quads)", dugCount, sx, sy, sz, walls);
+					HalfCraft.LOG.info("HalfCraft: sent {} dug cells of section {} {} {} to Half-Life ({} wall quads, {} cut at Half-Life's surface)", dugCount, sx, sy, sz, walls,
+						WALLS.cut);
 				}
 			}
 			if (++meshesSent <= 10 || meshesSent % 200 == 0) {
@@ -393,6 +395,12 @@ public final class WorldExporter {
 		BlockPos lit = BlockPos.containing(16 * sx + (corners[0] + corners[6]) * 0.5 + 0.5 * normal.getStepX(), 16 * sy + (corners[1] + corners[7]) * 0.5 + 0.5 * normal.getStepY(),
 			16 * sz + (corners[2] + corners[8]) * 0.5 + 0.5 * normal.getStepZ());
 		int light = LightCoordsUtil.pack(level.getBrightness(LightLayer.BLOCK, lit), level.getBrightness(LightLayer.SKY, lit));
+		for (float c : corners) {
+			if (Math.abs(c * 8 - Math.rint(c * 8)) > 1.0e-3F) {
+				WALLS.cut++; // a corner off the eighths: cut at Half-Life's surface (for the log)
+				break;
+			}
+		}
 		MESH.quad(corners, WALL_UV, light, normal);
 	}
 
@@ -810,12 +818,14 @@ public final class WorldExporter {
 
 	/**
 	 * The world around a section's dug cells as DigWalls reads it: Minecraft's dug cells and blocks,
-	 * Half-Life's rock and the material of its faces. Notes a neighbour whose region hasn't come yet.
+	 * Half-Life's rock, its triangles and the material of its faces. Notes a neighbour whose region hasn't
+	 * come yet.
 	 */
 	private static final class WallCells implements DigWalls.Cells {
 		ClientLevel level;
 		boolean unknown; // a wall was left out: Half-Life hasn't sent the region of unknownCell yet
 		long unknownCell;
+		int cut; // the section's wall quads cut at Half-Life's surface (for the log)
 		private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		private final List<HostTri> tris = new ArrayList<>();
 
@@ -849,6 +859,11 @@ public final class WorldExporter {
 				}
 			}
 			return Proto.DIG_STONE;
+		}
+
+		@Override
+		public void triangles(double minX, double minY, double minZ, double maxX, double maxY, double maxZ, List<HostTri> out) {
+			HostCollision.trianglesNear(new AABB(minX, minY, minZ, maxX, maxY, maxZ), out);
 		}
 	}
 }

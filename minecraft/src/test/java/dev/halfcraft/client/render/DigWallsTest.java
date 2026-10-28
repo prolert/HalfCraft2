@@ -1,10 +1,12 @@
 package dev.halfcraft.client.render;
 
 import static dev.halfcraft.link.Proto.DIG_IRON;
+import static dev.halfcraft.link.Proto.TRI_DIGGABLE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.halfcraft.world.DugBits;
+import dev.halfcraft.world.HostTri;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -17,8 +19,11 @@ import org.junit.jupiter.api.Test;
 
 class DigWallsTest {
 	private static final long[] FULL = { -1L, -1L, -1L, -1L, -1L, -1L, -1L, -1L };
+	// a world brush's face, iron
+	private static final int BRUSH = TRI_DIGGABLE | DIG_IRON << HostTri.MATERIAL_SHIFT;
 	// Direction ordinals
 	private static final int UP = 1;
+	private static final int NORTH = 2;
 	private static final int WEST = 4;
 
 	private record Pos(int x, int y, int z) {
@@ -27,11 +32,12 @@ class DigWallsTest {
 	private record Quad(float[] corners, int face, int material, float[] uv) {
 	}
 
-	/** Cells not dug, empty and rockless, except where the sets and the map say otherwise; every face iron. */
+	/** Cells not dug, empty and rockless (their region not known), except where the sets and the map say otherwise; every face iron. */
 	private static final class World implements DigWalls.Cells {
 		final Map<Pos, long[]> rock = new HashMap<>();
 		final Set<Pos> dug = new HashSet<>();
 		final Set<Pos> occluding = new HashSet<>();
+		final List<HostTri> tris = new ArrayList<>();
 
 		@Override
 		public boolean dug(int x, int y, int z) {
@@ -52,6 +58,49 @@ class DigWallsTest {
 		public int material(int x, int y, int z) {
 			return DIG_IRON;
 		}
+
+		@Override
+		public void triangles(double minX, double minY, double minZ, double maxX, double maxY, double maxZ, List<HostTri> out) {
+			for (HostTri t : this.tris) {
+				if (t.maxX >= minX && t.minX <= maxX && t.maxY >= minY && t.minY <= maxY && t.maxZ >= minZ && t.minZ <= maxZ) {
+					out.add(t);
+				}
+			}
+		}
+
+		/** A face of Half-Life's (flags: its Proto.TRI_*): the quad a, b, c, d, wound so its normal ((b - a) x (c - a)) points out of the brush. */
+		void face(int flags, double[] a, double[] b, double[] c, double[] d) {
+			this.tris.add(new HostTri(floats(a, b, c), 0, flags));
+			this.tris.add(new HostTri(floats(a, c, d), 0, flags));
+		}
+
+		/** Known cells with no rock. */
+		void empty(Pos... cells) {
+			for (Pos p : cells) {
+				this.rock.put(p, new long[8]);
+			}
+		}
+	}
+
+	private static float[] floats(double[]... corners) {
+		float[] v = new float[corners.length * 3];
+		for (int k = 0; k < v.length; k++) {
+			v[k] = (float) corners[k / 3][k % 3];
+		}
+		return v;
+	}
+
+	private static double[] p(double x, double y, double z) {
+		return new double[] { x, y, z };
+	}
+
+	/** Every row layer of a cell's rock alike: bit z * 8 + x of {@code rows} for each of the 8 layers from {@code y0} up, none below. */
+	private static long[] from(int y0, long rows) {
+		long[] layers = new long[8];
+		for (int y = y0; y < 8; y++) {
+			layers[y] = rows;
+		}
+		return layers;
 	}
 
 	/** A world with rock {@code layers} east of the dug cell (1, 2, 3). */
@@ -91,13 +140,40 @@ class DigWallsTest {
 		return new double[] { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
 	}
 
+	private static double length(double[] v) {
+		return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+	}
+
+	/** The quads' area: each as its two triangles (a cut sub-voxel's triangle repeats its last corner). */
 	private static double area(List<Quad> quads) {
 		double area = 0.0;
 		for (Quad q : quads) {
-			double[] n = cross(minus(q.corners, 1, 0), minus(q.corners, 3, 0));
-			area += Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+			area += 0.5 * length(cross(minus(q.corners, 1, 0), minus(q.corners, 2, 0)));
+			area += 0.5 * length(cross(minus(q.corners, 2, 0), minus(q.corners, 3, 0)));
 		}
 		return area;
+	}
+
+	/** The least of the quads' corners' coordinate {@code axis}. */
+	private static double min(List<Quad> quads, int axis) {
+		double min = Double.MAX_VALUE;
+		for (Quad q : quads) {
+			for (int k = 0; k < 4; k++) {
+				min = Math.min(min, corner(q, k, axis));
+			}
+		}
+		return min;
+	}
+
+	/** The greatest of the quads' corners' coordinate {@code axis}. */
+	private static double max(List<Quad> quads, int axis) {
+		double max = -Double.MAX_VALUE;
+		for (Quad q : quads) {
+			for (int k = 0; k < 4; k++) {
+				max = Math.max(max, corner(q, k, axis));
+			}
+		}
+		return max;
 	}
 
 	private static double[] normal(Quad q) {
@@ -210,6 +286,208 @@ class DigWallsTest {
 		World w = eastRock(FULL);
 		w.occluding.add(new Pos(1, 2, 3));
 		assertEquals(0, walls(w).size());
+	}
+
+	/** A ceiling's underside at {@code y} across the east neighbour and around it (x 0-5, z 0-7), facing down. */
+	private static void ceiling(World w, int flags, double y) {
+		w.face(flags, p(0, y, 0), p(5, y, 0), p(5, y, 7), p(0, y, 7));
+	}
+
+	@Test
+	void shouldEndAHoleInACeilingAtItsUnderside() {
+		// the underside at 2.3: the ceiling's sub-voxels reach down to 2.25
+		World w = eastRock(from(2, -1L));
+		ceiling(w, BRUSH, 2.3);
+		List<Quad> quads = walls(w);
+		assertEquals(6, quads.size());
+		assertEquals(0.7, area(quads), 1e-5);
+		assertEquals(2.3, min(quads, 1), 1e-5);
+		for (Quad q : quads) {
+			assertEquals(WEST, q.face);
+			assertEquals(DIG_IRON, q.material);
+			assertTrue(normal(q)[0] < 0, "faces west, into the dug cell");
+			assertAllIn(q, 0, 2, 2);
+			for (int k = 0; k < 4; k++) {
+				assertEquals(corner(q, k, 2) - 3, q.uv[k * 2], 1e-5, "u across the face");
+				assertEquals(3 - corner(q, k, 1), q.uv[k * 2 + 1], 1e-5, "v down the face");
+			}
+		}
+	}
+
+	@Test
+	void shouldNotCutAlongTheFacesTheDigCutsOnTheGrid() {
+		// Half-Life's cut of the dug cell out of the ceiling: its piece's face on the wall itself, and faces along the wall's edges
+		World w = eastRock(from(2, -1L));
+		ceiling(w, BRUSH, 2.3);
+		w.face(BRUSH, p(2, 2.3, 3), p(2, 2.3, 4), p(2, 3, 4), p(2, 3, 3)); // on the wall, toward the dug cell
+		w.face(BRUSH, p(2, 2.3, 3), p(2, 3, 3), p(3, 3, 3), p(3, 2.3, 3)); // along its edge z 3, toward less z
+		w.face(BRUSH, p(2, 2.3, 4), p(3, 2.3, 4), p(3, 3, 4), p(2, 3, 4)); // along its edge z 4, toward more z
+		w.face(BRUSH, p(2, 3, 3), p(2, 3, 4), p(3, 3, 4), p(3, 3, 3)); // along its top, toward more y
+		List<Quad> quads = walls(w);
+		assertEquals(6, quads.size());
+		assertEquals(0.7, area(quads), 1e-5);
+		assertEquals(2.3, min(quads, 1), 1e-5);
+	}
+
+	@Test
+	void shouldEndTheSideOfADoorwayAtTheWallsFace() {
+		// a wall from z 3.4 on, its face toward the room at less z: its sub-voxels reach back to 3.375
+		World w = eastRock(from(0, 0xFFFFFFFFFF000000L));
+		w.face(BRUSH, p(0, 0, 3.4), p(0, 5, 3.4), p(5, 5, 3.4), p(5, 0, 3.4));
+		List<Quad> quads = walls(w);
+		assertEquals(16, quads.size());
+		assertEquals(0.6, area(quads), 1e-5);
+		assertEquals(3.4, min(quads, 2), 1e-5);
+		assertEquals(4.0, max(quads, 2), 1e-6);
+	}
+
+	@Test
+	void shouldNotCutAlongAFaceInsideTheRock() {
+		// a brush's top at 2.55 under another brush
+		World w = eastRock(FULL);
+		w.face(BRUSH, p(0, 2.55, 0), p(0, 2.55, 7), p(5, 2.55, 7), p(5, 2.55, 0));
+		List<Quad> quads = walls(w);
+		assertEquals(8, quads.size());
+		assertEquals(1.0, area(quads), 1e-6);
+	}
+
+	@Test
+	void shouldNotCutAlongAFaceThatIsNotDiggable() {
+		// a prop's or a displacement's: which side of it is open isn't known
+		World w = eastRock(from(2, -1L));
+		ceiling(w, 0, 2.3);
+		List<Quad> quads = walls(w);
+		assertEquals(6, quads.size());
+		assertEquals(0.75, area(quads), 1e-6);
+		assertEquals(2.25, min(quads, 1), 1e-6);
+	}
+
+	@Test
+	void shouldLeaveTheSubVoxelAtAnInnerCornerWhole() {
+		// the underside at 2.3 over a wall up to z 3.4, the wall's face toward the room at more z
+		World w = eastRock(from(2, -1L));
+		long[] rock = w.rock.get(new Pos(2, 2, 3));
+		rock[0] = 0x00000000FFFFFFFFL;
+		rock[1] = 0x00000000FFFFFFFFL;
+		ceiling(w, BRUSH, 2.3);
+		w.face(BRUSH, p(0, 0, 3.4), p(5, 0, 3.4), p(5, 2.3, 3.4), p(0, 2.3, 3.4));
+		List<Quad> quads = walls(w);
+		assertEquals(11, quads.size());
+		// the wall cut at its face below the ceiling, the ceiling at its underside past the wall, the sub-voxel at the corner whole
+		assertEquals(0.4 * 0.25 + 0.5 * 0.125 + 0.5 * 0.075 + 0.625, area(quads), 1e-5);
+	}
+
+	@Test
+	void shouldCutBothFacesAtABrushsOuterCorner() {
+		// a beam up to z 3.4 with its underside at 2.3: faces down and toward more z
+		World w = eastRock(from(2, 0x00000000FFFFFFFFL));
+		w.face(BRUSH, p(0, 2.3, 0), p(5, 2.3, 0), p(5, 2.3, 3.4), p(0, 2.3, 3.4));
+		w.face(BRUSH, p(0, 2.3, 3.4), p(5, 2.3, 3.4), p(5, 5, 3.4), p(0, 5, 3.4));
+		List<Quad> quads = walls(w);
+		assertEquals(12, quads.size());
+		assertEquals(0.4 * 0.7, area(quads), 1e-5);
+		assertEquals(2.3, min(quads, 1), 1e-5);
+		assertEquals(3.4, max(quads, 2), 1e-5);
+	}
+
+	@Test
+	void shouldNotCutAwayABrushUnderAnotherOnesFace() {
+		// the underside at 2.3 over everything; under it from z 3.45 on, a brush down to 2.27 (its underside, and its side toward less z)
+		World w = eastRock(from(2, -1L));
+		ceiling(w, BRUSH, 2.3);
+		w.face(BRUSH, p(0, 2.27, 3.45), p(5, 2.27, 3.45), p(5, 2.27, 7), p(0, 2.27, 7));
+		w.face(BRUSH, p(0, 2.27, 3.45), p(0, 2.3, 3.45), p(5, 2.3, 3.45), p(5, 2.27, 3.45));
+		List<Quad> quads = walls(w);
+		// cut at 2.3 before the step and at 2.27 past it, the sub-voxel with the step (z 3.375-3.5) whole
+		assertEquals(0.375 * 0.075 + 0.125 * 0.125 + 0.5 * 0.105 + 0.625, area(quads), 1e-5);
+		List<Quad> before = new ArrayList<>(), past = new ArrayList<>();
+		for (Quad q : quads) {
+			if (max(List.of(q), 2) <= 3.375 + 1e-6) {
+				before.add(q);
+			} else if (min(List.of(q), 2) >= 3.5 - 1e-6) {
+				past.add(q);
+			}
+		}
+		assertEquals(2.3, min(before, 1), 1e-5);
+		assertEquals(2.27, min(past, 1), 1e-5);
+	}
+
+	@Test
+	void shouldLookForTheOpenAirPastTheFacesEdge() {
+		// the underside at 2.05, in the face's lowest sub-voxels: the room under it is in the cell under the neighbour
+		World unknown = eastRock(FULL);
+		ceiling(unknown, BRUSH, 2.05);
+		assertEquals(1.0, area(walls(unknown)), 1e-6); // that cell's region hasn't come: left whole
+		World w = eastRock(FULL);
+		ceiling(w, BRUSH, 2.05);
+		w.empty(new Pos(2, 1, 3));
+		List<Quad> quads = walls(w);
+		assertEquals(0.95, area(quads), 1e-5);
+		assertEquals(2.05, min(quads, 1), 1e-5);
+		World dug = eastRock(FULL);
+		ceiling(dug, BRUSH, 2.05);
+		dug.dug.add(new Pos(2, 1, 3));
+		assertEquals(0.95, area(walls(dug)), 1e-5);
+	}
+
+	@Test
+	void shouldCutAFloorAlongAWallInTheCellUnderIt() {
+		// a wall from x 1.4 on under the dug cell, its face toward less x
+		World w = new World();
+		w.rock.put(new Pos(1, 1, 3), layers(0xF8F8F8F8F8F8F8F8L));
+		w.face(BRUSH, p(1.4, 0, 0), p(1.4, 0, 7), p(1.4, 5, 7), p(1.4, 5, 0));
+		List<Quad> quads = walls(w);
+		assertEquals(16, quads.size());
+		assertEquals(0.6, area(quads), 1e-5);
+		assertEquals(1.4, min(quads, 0), 1e-5);
+		for (Quad q : quads) {
+			assertEquals(UP, q.face);
+			assertTrue(normal(q)[1] > 0, "faces up, into the dug cell");
+			assertAllIn(q, 1, 2, 2);
+			assertAllIn(q, 2, 3, 4);
+		}
+	}
+
+	@Test
+	void shouldCutASouthWallAlongAWallsFace() {
+		// a wall up to x 1.4 south of the dug cell, its face toward more x
+		World w = new World();
+		w.rock.put(new Pos(1, 2, 4), layers(0x0F0F0F0F0F0F0F0FL));
+		w.face(BRUSH, p(1.4, 0, 0), p(1.4, 5, 0), p(1.4, 5, 7), p(1.4, 0, 7));
+		List<Quad> quads = walls(w);
+		assertEquals(16, quads.size());
+		assertEquals(0.4, area(quads), 1e-5);
+		assertEquals(1.4, max(quads, 0), 1e-5);
+		for (Quad q : quads) {
+			assertEquals(NORTH, q.face);
+			assertTrue(normal(q)[2] < 0, "faces north, into the dug cell");
+			assertAllIn(q, 2, 4, 4);
+			assertAllIn(q, 0, 1, 1.5);
+		}
+	}
+
+	@Test
+	void shouldCutAlongASlopeInTriangles() {
+		// a slope rising toward more z (y - 2 = z - 3), rock above it: its face toward less y and more z
+		World w = new World();
+		long[] rock = new long[8];
+		for (int y = 0; y < 8; y++) {
+			for (int z = 0; z <= y; z++) {
+				rock[y] |= 0xFFL << (z * 8);
+			}
+		}
+		w.rock.put(new Pos(2, 2, 3), rock);
+		w.empty(new Pos(2, 1, 3), new Pos(2, 2, 4));
+		w.face(BRUSH, p(0, 2, 3), p(5, 2, 3), p(5, 3, 4), p(0, 3, 4));
+		List<Quad> quads = walls(w);
+		// a row of whole sub-voxels and a triangle on the slope, each
+		assertEquals(15, quads.size());
+		assertEquals(0.5, area(quads), 1e-5);
+		for (Quad q : quads) {
+			for (int k = 0; k < 4; k++) {
+				assertTrue(corner(q, k, 1) - 2 >= corner(q, k, 2) - 3 - 1e-5, "above the slope");
+			}
+		}
 	}
 
 	@Test
