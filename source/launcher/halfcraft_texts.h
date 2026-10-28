@@ -1,8 +1,11 @@
 #pragma once
 
 // what HalfCraft.exe tells the player, in english and russian (halfcraft_launcher.cpp picks one). {0}, {1}, ...
-// are filled in where a text is said. the games keep steam's names, untranslated. utf-8: the launcher's cl line
-// has /utf-8.
+// are filled in where a text is said. the games keep steam's names, untranslated. tools/build/package.py checks
+// the built exe's texts (HalfCraft.exe --strings): ALL lists every one, and each language has the same {N}s.
+
+// utf-8: the launcher's cl line has /utf-8. without it msvc reads this file in the windows code page
+static_assert(L"я"[0] == 0x044F, "build HalfCraft.exe with /utf-8: its russian texts are utf-8");
 
 namespace halfcraft::launcher
 {
@@ -12,7 +15,7 @@ namespace halfcraft::launcher
 		const wchar_t* russian;
 	};
 
-	namespace text
+	namespace texts
 	{
 		constexpr Text OUTSIDE_FOLDER{
 			L"HalfCraft.exe has to stay in the HalfCraft folder, next to its game-hl2, game-hl2dm and minecraft folders.",
@@ -21,14 +24,14 @@ namespace halfcraft::launcher
 		// {0}: the folder's name
 		constexpr Text MISSING_FOLDER{
 			L"The {0} folder next to HalfCraft.exe is missing. Unpack the whole HalfCraft zip again.",
-			L"Рядом с HalfCraft.exe нет папки {0}. Распакуйте архив HalfCraft заново, целиком."
+			L"Рядом с HalfCraft.exe нет папки {0}. Распакуйте весь архив HalfCraft заново."
 		};
 		// {0}: HalfCraft's folder
 		constexpr Text ODD_PATH{
 			L"HalfCraft's folder has characters in its path that Half-Life 2 may not read:\n{0}\n\n"
 			L"If the game doesn't start, move the HalfCraft folder somewhere with a plain English path, like C:\\Games\\HalfCraft.\n\nStart anyway?",
 			L"В пути к папке HalfCraft есть символы, которые Half-Life 2 может не прочитать:\n{0}\n\n"
-			L"Если игра не запустится, перенесите папку HalfCraft туда, где в пути только латинские буквы, например в C:\\Games\\HalfCraft.\n\nВсё равно запустить?"
+			L"Если игра не запустится, перенесите папку HalfCraft в место с путём из одних латинских букв, например C:\\Games\\HalfCraft.\n\nВсё равно запустить?"
 		};
 
 		constexpr Text NO_STEAM{
@@ -37,12 +40,12 @@ namespace halfcraft::launcher
 		};
 		constexpr Text NO_HALF_LIFE_2{
 			L"Half-Life 2 isn't installed. HalfCraft needs it from Steam.\n\nOpen Steam to install it?",
-			L"Не найдена Half-Life 2. Для HalfCraft нужна Half-Life 2 из Steam.\n\nОткрыть Steam, чтобы установить её?"
+			L"Half-Life 2 не установлена, а без неё HalfCraft не работает.\n\nОткрыть Steam, чтобы установить её?"
 		};
 		// {0}: the episodes' names, each on a line of its own
 		constexpr Text MISSING_EPISODES{
 			L"Steam hasn't installed:{0}\n\nThey come with Half-Life 2. Their chapters won't load without them; Half-Life 2's will.\n\nOpen Steam to install them?",
-			L"В Steam не установлены:{0}\n\nОни идут в комплекте с Half-Life 2. Без них не загрузятся их главы (главы Half-Life 2 будут работать).\n\n"
+			L"В Steam не установлены:{0}\n\nОни идут в комплекте с Half-Life 2. Без них главы эпизодов не загрузятся, а главы Half-Life 2 будут работать.\n\n"
 			L"Открыть Steam, чтобы установить их?"
 		};
 		// {0}: the game, {1}: its exe
@@ -53,7 +56,7 @@ namespace halfcraft::launcher
 		// {0}: the game, {1}: the exe it lacks
 		constexpr Text MISSING_ENGINE_EXE{
 			L"{0} has no {1}. Let Steam update it, or check its files (Properties, Installed Files, Verify integrity).",
-			L"В игре {0} нет файла {1}. Дайте Steam её обновить или проверьте файлы игры (Свойства → Установленные файлы → Проверить целостность файлов игры)."
+			L"В игре {0} нет файла {1}. Дайте Steam обновить игру или проверьте её файлы (Свойства → Установленные файлы → Проверить целостность файлов игры)."
 		};
 		constexpr Text STEAM_WONT_START{
 			L"Couldn't start Steam. Start it, sign in, then start HalfCraft again.",
@@ -65,13 +68,13 @@ namespace halfcraft::launcher
 		};
 
 		// the engine question: a command link for each (its first line, then a note under it)
+		constexpr Text HL2DM_CHOICE{
+			L"Half-Life 2: Deathmatch (64-bit engine, more memory)\nRecommended: digging through Half-Life's walls works only on this engine.",
+			L"Half-Life 2: Deathmatch (64-битный движок, больше памяти)\nРекомендуется: копать стены Half-Life можно только на нём."
+		};
 		constexpr Text HL2_CHOICE{
 			L"Half-Life 2 (32-bit engine)\nDigging through Half-Life's walls doesn't work on it.",
 			L"Half-Life 2 (32-битный движок)\nНа нём нельзя копать стены Half-Life."
-		};
-		constexpr Text HL2DM_CHOICE{
-			L"Half-Life 2: Deathmatch engine (64-bit, more memory)\nDigging through Half-Life's walls works on it.",
-			L"Движок Half-Life 2: Deathmatch (64-битный, больше памяти)\nНа нём можно копать стены Half-Life."
 		};
 		constexpr Text WHICH_ENGINE{
 			L"Which engine should run HalfCraft?",
@@ -131,8 +134,8 @@ namespace halfcraft::launcher
 			&MISSING_ENGINE_EXE,
 			&STEAM_WONT_START,
 			&STEAM_SIGNED_OUT,
-			&HL2_CHOICE,
 			&HL2DM_CHOICE,
+			&HL2_CHOICE,
 			&WHICH_ENGINE,
 			&ENGINE_SAVES,
 			&REMEMBER_ENGINE,

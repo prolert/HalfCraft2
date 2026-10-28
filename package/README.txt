@@ -24,11 +24,14 @@ YOU NEED
 PLAY
 
 1. Unpack the zip anywhere, e.g. C:\Games\HalfCraft. A path with only English letters is safest.
+   Ticking Unblock in the zip's Properties (right-click, Properties) before unpacking keeps
+   Windows from warning when you start it.
 2. Start HalfCraft.exe. It speaks Windows' language (Russian on a Russian Windows, English
    otherwise); HalfCraft EN.cmd starts it in English, HalfCraft RU.cmd in Russian. Windows may warn
    about an unknown publisher: click More info, then Run anyway (or just Run).
-   If you have Half-Life 2: Deathmatch too, HalfCraft asks which engine to run and can remember
-   your choice. Hold Shift while starting it to choose again.
+   If you have Half-Life 2: Deathmatch too, HalfCraft asks which engine to run (Deathmatch's by
+   default: only it digs through Half-Life's walls) and can remember your choice. To choose
+   again, hold Shift while starting it until the question appears.
 3. The first time, Prism Launcher opens: sign in with your Microsoft account. Half-Life 2 starts
    once you're signed in. Minecraft downloads (a few minutes the first time) and joins by itself;
    a line at the top of the screen says how far along it is.
@@ -69,8 +72,9 @@ downloaded Minecraft stay.
 
 IF SOMETHING'S WRONG
 
-- The line at the top of the screen says what Minecraft is doing. If it says Minecraft isn't
-  running, quit and start HalfCraft.exe again.
+- The line at the top of the screen says what Minecraft is doing. If it asks you to sign in to
+  Minecraft in the Prism Launcher window, switch to that window with Alt+Tab. If it says
+  Minecraft isn't running, quit and start HalfCraft again.
 - Logs: game-hl2\console.log or game-hl2dm\console.log (Half-Life, by engine),
   minecraft\Prism\instances\HalfCraft\.minecraft\logs\latest.log (Minecraft), minecraft\Prism\logs
   (Prism Launcher).

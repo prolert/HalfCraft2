@@ -9,21 +9,24 @@ the zip's HalfCraft folder: HalfCraft.exe, "HalfCraft EN.cmd" and "HalfCraft RU.
 russian, from package\\), game-hl2\\ and game-hl2dm\\ (the game folders of the two engines,
 tools/halfcraft/game_folder.py), minecraft\\ (portable Prism Launcher with the HalfCraft instance and its mods,
 from package\\minecraft), README.txt and README_RU.txt (english, russian), LICENSE.txt, THIRD-PARTY-NOTICES.md.
-its names are ascii, which every unzip reads (windows 11's own reads utf-8 names, older ones may not).
+its names are ascii, which every unzip reads (windows 11's own reads utf-8 names, older ones may not). HalfCraft.exe's
+english and russian texts are checked first (check_launcher_texts).
 
 building needs what tools/build/build_hl2.py needs plus JDK 25 (tools/halfcraft/gradle.py finds it). Prism Launcher
 and Fabric API are downloaded once into .cache\\package and checked against the hashes pinned below.
 """
 
 import argparse
+import os
 import re
 import shutil
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools\, where the halfcraft package is
-from halfcraft import REPO, ToolError, build, downloads, engines, folders, game_folder, gradle, shaders
+from halfcraft import REPO, ToolError, build, commands, downloads, engines, folders, game_folder, gradle, shaders
 from halfcraft.version import version
 
 PRISM_VERSION = "11.1.1"
@@ -62,13 +65,13 @@ def folder_entries(folder: Path, prefix: str) -> dict[str, Path]:
 
 
 def copy_text(source: Path, target: Path, values: dict[str, str] | None = None) -> None:
-    """text the player opens in notepad: crlf, placeholders ({KEY}) filled in, utf-8 with a bom (so no viewer
-    reads the russian in another code page).
+    """text the player opens in notepad: crlf, placeholders ({KEY}) filled in, utf-8, with a bom when it isn't
+    ascii (so no viewer reads the russian in another code page).
     """
     text = source.read_text(encoding="utf-8-sig")
     for key, value in (values or {}).items():
         text = text.replace(f"{{{key}}}", value)
-    target.write_bytes(text.replace("\n", "\r\n").encode("utf-8-sig"))
+    target.write_bytes(text.replace("\n", "\r\n").encode("utf-8" if text.isascii() else "utf-8-sig"))
 
 
 def copy_script(source: Path, target: Path) -> None:
@@ -79,6 +82,38 @@ def copy_script(source: Path, target: Path) -> None:
     if not data.isascii():
         raise ToolError(f"{source} has non-ascii bytes: cmd can misread it; say it in HalfCraft.exe's texts instead")
     target.write_bytes(data.decode("ascii").replace("\r\n", "\n").replace("\n", "\r\n").encode("ascii"))
+
+
+def copy_launchers(launcher: Path, stage: Path) -> None:
+    """HalfCraft.exe, and the .cmd files that start it in english or russian."""
+    shutil.copy2(launcher, stage)
+    for name in LAUNCHERS:
+        copy_script(REPO / "package" / name, stage / name)
+
+
+def check_launcher_texts(launcher: Path) -> None:
+    """HalfCraft.exe --strings in each language it speaks: every text in source\\launcher\\halfcraft_texts.h comes out
+    (its ALL lists them all), english as ascii and russian in cyrillic (the exe was built with /utf-8), and each text
+    has the same {N}s in both. it starts nothing.
+    """
+    header = (REPO / "source/launcher/halfcraft_texts.h").read_text(encoding="utf-8")
+    count = len(re.findall(r"constexpr Text \w+\{", header))
+    said: dict[str, list[str]] = {}
+    with tempfile.TemporaryDirectory() as folder:
+        for language in ("en", "ru"):
+            out = Path(folder) / f"{language}.txt"
+            commands.run([launcher, "--strings", out], timeout=60, env={**os.environ, "HALFCRAFT_LANG": language}, what=f"HalfCraft.exe --strings ({language})")
+            head, *texts = re.split(r"(?m)^---\n", out.read_text(encoding="utf-8"))
+            if not head.startswith(f"language: {language}\n"):
+                raise ToolError(f"HalfCraft.exe with HALFCRAFT_LANG={language} picked another language: {head.splitlines()[0]}")
+            if len(texts) != count:
+                raise ToolError(f"HalfCraft.exe --strings gave {len(texts)} texts, halfcraft_texts.h has {count}: list them all in its ALL")
+            said[language] = [text.removesuffix("\n") for text in texts]
+    for english, russian in zip(said["en"], said["ru"], strict=True):
+        if not english.isascii() or not re.search("[Ѐ-ӿ]", russian):  # cyrillic
+            raise ToolError(f"HalfCraft.exe's text isn't english and russian (built without /utf-8?): {english!r} / {russian!r}")
+        if sorted(re.findall(r"\{\d\}", english)) != sorted(re.findall(r"\{\d\}", russian)):
+            raise ToolError(f"HalfCraft.exe's english and russian fill in different values: {english!r} / {russian!r}")
 
 
 def main() -> None:
@@ -101,6 +136,7 @@ def main() -> None:
     for file in [jar, launcher, *(dll for engine in both for dll in engine.dlls()), *(shader.vcs for shader in shaders.SHADERS)]:
         if not file.is_file():
             raise ToolError(f"missing {file} (build first, or drop --no-build)")
+    check_launcher_texts(launcher)
 
     prism_zip = CACHE / PRISM_ZIP
     prism_license = CACHE / f"PrismLauncher-{PRISM_VERSION}-LICENSE.txt"
@@ -136,9 +172,7 @@ def main() -> None:
     shutil.copy2(jar, mods / "halfcraft.jar")
     shutil.copy2(fabric_api, mods / "fabric-api.jar")
 
-    shutil.copy2(launcher, stage)
-    for name in LAUNCHERS:
-        copy_script(REPO / "package" / name, stage / name)
+    copy_launchers(launcher, stage)
     copy_text(REPO / "package/README.txt", stage / "README.txt", {"VERSION": text})
     copy_text(REPO / "package/README_RU.txt", stage / "README_RU.txt", {"VERSION": text})
     copy_text(REPO / "LICENSE", stage / "LICENSE.txt")

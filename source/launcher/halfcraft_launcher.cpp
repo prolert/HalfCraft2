@@ -40,7 +40,7 @@
 namespace
 {
 	namespace fs = std::filesystem;
-	namespace text = halfcraft::launcher::text;
+	namespace texts = halfcraft::launcher::texts;
 	using halfcraft::launcher::Text;
 	using namespace std::chrono_literals;
 
@@ -73,27 +73,33 @@ namespace
 		const wchar_t* exe;     // in that game's folder
 		Text           choice;  // what the player picks it by
 	};
-	// half-life 2 is the one game halfcraft always needs (its content), so its engine is always there.
-	// deathmatch's is the 64-bit one: more memory, and the shader dll that digs half-life's walls
+	// the engine question lists them in this order and picks the first unless the player chose another before.
+	// deathmatch's goes first: it's the one with the shader dll that digs half-life's walls (and 64-bit, more
+	// memory). half-life 2's is always there: half-life 2 is the one game halfcraft always needs (its content)
 	constexpr Engine ENGINES[]{
-		{ L"hl2", HALF_LIFE_2, L"hl2.exe", text::HL2_CHOICE },
-		{ L"hl2dm", DEATHMATCH, L"hl2mp_win64.exe", text::HL2DM_CHOICE },
+		{ L"hl2dm", DEATHMATCH, L"hl2mp_win64.exe", texts::HL2DM_CHOICE },
+		{ L"hl2", HALF_LIFE_2, L"hl2.exe", texts::HL2_CHOICE },
 	};
 
 	bool russian = false;  // the player's language (speaks_russian), set before anything is said
 
+	/// HALFCRAFT_LANG as set, or empty (unset, or too long to be a language).
+	std::wstring language_variable()
+	{
+		wchar_t     value[64]{};
+		const DWORD length = ::GetEnvironmentVariableW(LANGUAGE_VARIABLE, value, static_cast<DWORD>(std::size(value)));
+		return length > 0 && length < std::size(value) ? std::wstring(value, length) : std::wstring();
+	}
+
 	/// HALFCRAFT_LANG's ru or en, else windows' display language: russian for russian, english for the rest.
 	bool speaks_russian()
 	{
-		wchar_t     chosen[8]{};
-		const DWORD length = ::GetEnvironmentVariableW(LANGUAGE_VARIABLE, chosen, static_cast<DWORD>(std::size(chosen)));
-		if (length > 0 && length < std::size(chosen)) {
-			if (_wcsicmp(chosen, L"ru") == 0) {
-				return true;
-			}
-			if (_wcsicmp(chosen, L"en") == 0) {
-				return false;
-			}
+		const std::wstring chosen = language_variable();
+		if (_wcsicmp(chosen.c_str(), L"ru") == 0) {
+			return true;
+		}
+		if (_wcsicmp(chosen.c_str(), L"en") == 0) {
+			return false;
 		}
 		return PRIMARYLANGID(::GetUserDefaultUILanguage()) == LANG_RUSSIAN;
 	}
@@ -260,13 +266,13 @@ namespace
 		}
 		const std::wstring steam_exe = registry_string(STEAM_KEY, L"SteamExe");
 		if (steam_exe.empty() || reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", steam_exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32) {
-			fail(say(text::STEAM_WONT_START));
+			fail(say(texts::STEAM_WONT_START));
 			return false;
 		}
 		const auto give_up = std::chrono::steady_clock::now() + STEAM_SIGN_IN_WAIT;
 		while (!steam_signed_in()) {
 			if (std::chrono::steady_clock::now() > give_up) {
-				fail(say(text::STEAM_SIGNED_OUT));
+				fail(say(texts::STEAM_SIGNED_OUT));
 				return false;
 			}
 			std::this_thread::sleep_for(500ms);
@@ -279,7 +285,7 @@ namespace
 	{
 		const auto bundle = halfcraft::prism::find_bundle(game);
 		if (bundle.empty()) {
-			fail(say(text::MISSING_FOLDER, { L"minecraft" }));
+			fail(say(texts::MISSING_FOLDER, { L"minecraft" }));
 			return false;
 		}
 		// one running now is most likely the last game's on its way out: wait for it, then start a new one
@@ -292,18 +298,18 @@ namespace
 		}
 		if (!halfcraft::prism::launcher_running(bundle)) {
 			if (!halfcraft::prism::signed_in(bundle)) {
-				tell(say(text::FIRST_START));
+				tell(say(texts::FIRST_START));
 			}
 			std::wstring error;
 			if (!halfcraft::prism::start(bundle, error)) {
-				fail(say(text::MINECRAFT_WONT_START, { error }));
+				fail(say(texts::MINECRAFT_WONT_START, { error }));
 				return false;
 			}
 		}
 		// prism quits if the player closes it without signing in (or plays its demo, which is fine too)
 		while (!halfcraft::prism::signed_in(bundle) && !halfcraft::prism::minecraft_running()) {
 			if (!halfcraft::prism::launcher_running(bundle) && !halfcraft::prism::minecraft_running()) {
-				tell(say(text::NO_ACCOUNT), MB_ICONWARNING);
+				tell(say(texts::NO_ACCOUNT), MB_ICONWARNING);
 				return false;
 			}
 			std::this_thread::sleep_for(500ms);
@@ -372,12 +378,13 @@ namespace
 		for (const Engine* engine : engines) {
 			choices.push_back(say(engine->choice));
 		}
-		const std::wstring question = say(text::WHICH_ENGINE);
-		const std::wstring saves = say(text::ENGINE_SAVES);
-		const std::wstring keep = say(text::REMEMBER_ENGINE);
+		const std::wstring question = say(texts::WHICH_ENGINE);
+		const std::wstring saves = say(texts::ENGINE_SAVES);
+		const std::wstring keep = say(texts::REMEMBER_ENGINE);
 
 		TASKDIALOGCONFIG               config{ sizeof(config) };
 		std::vector<TASKDIALOG_BUTTON> buttons;
+		config.nDefaultButton = FIRST_BUTTON;  // ENGINES' first, deathmatch's when it's there, unless one was remembered
 		for (std::size_t i = 0; i < engines.size(); ++i) {
 			const int id = FIRST_BUTTON + static_cast<int>(i);
 			buttons.push_back({ id, choices[i].c_str() });
@@ -400,7 +407,7 @@ namespace
 		if (FAILED(result)) {
 			wchar_t code[16];
 			std::swprintf(code, std::size(code), L"0x%08lX", static_cast<unsigned long>(result));
-			fail(say(text::ASK_ENGINE_FAILED, { code }));
+			fail(say(texts::ASK_ENGINE_FAILED, { code }));
 			return nullptr;
 		}
 		remember = checked != FALSE;
@@ -432,7 +439,7 @@ namespace
 		// a choice not to remember drops the old one too, so the next start asks again
 		if (!::WritePrivateProfileStringW(SETTINGS_SECTION, SETTINGS_ENGINE, remember ? chosen->id : nullptr, settings.c_str())) {
 			const DWORD error = ::GetLastError();
-			tell(say(text::ENGINE_NOT_KEPT, { settings.wstring(), std::to_wstring(error) }), MB_ICONWARNING);
+			tell(say(texts::ENGINE_NOT_KEPT, { settings.wstring(), std::to_wstring(error) }), MB_ICONWARNING);
 		}
 		return chosen;
 	}
@@ -452,7 +459,7 @@ namespace
 		if (missing.empty() || ::GetPrivateProfileIntW(SETTINGS_SECTION, SETTINGS_EPISODES_DECLINED, 0, settings.c_str()) != 0) {
 			return;
 		}
-		if (ask(say(text::MISSING_EPISODES, { names }))) {
+		if (ask(say(texts::MISSING_EPISODES, { names }))) {
 			for (const int id : missing) {
 				::ShellExecuteW(nullptr, L"open", (L"steam://install/" + std::to_wstring(id)).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			}
@@ -468,19 +475,19 @@ namespace
 
 		const fs::path here = exe_dir();
 		if (std::none_of(std::begin(ENGINES), std::end(ENGINES), [&](const Engine& engine) { return is_game_dir(game_dir(here, engine)); })) {
-			return fail(say(text::OUTSIDE_FOLDER));
+			return fail(say(texts::OUTSIDE_FOLDER));
 		}
-		if (!fits_ansi_code_page(here.wstring()) && !ask(say(text::ODD_PATH, { here.wstring() }))) {
+		if (!fits_ansi_code_page(here.wstring()) && !ask(say(texts::ODD_PATH, { here.wstring() }))) {
 			return 1;
 		}
 
 		const std::wstring steam = registry_string(STEAM_KEY, L"SteamPath");
 		if (steam.empty()) {
-			return fail(say(text::NO_STEAM));
+			return fail(say(texts::NO_STEAM));
 		}
 		const auto libraries = steam_libraries(steam);
 		if (app_dir(libraries, HALF_LIFE_2).empty()) {
-			if (ask(say(text::NO_HALF_LIFE_2))) {
+			if (ask(say(texts::NO_HALF_LIFE_2))) {
 				::ShellExecuteW(nullptr, L"open", (L"steam://install/" + std::to_wstring(HALF_LIFE_2.id)).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			}
 			return 1;
@@ -489,7 +496,7 @@ namespace
 		// source allows one game at a time, whichever engine runs it
 		for (const auto& running : ENGINES) {
 			if (process_running(running.exe)) {
-				return fail(say(text::ALREADY_RUNNING, { running.app.name, running.exe }));
+				return fail(say(texts::ALREADY_RUNNING, { running.app.name, running.exe }));
 			}
 		}
 
@@ -499,12 +506,12 @@ namespace
 		}
 		const fs::path game = game_dir(here, *engine);
 		if (!is_game_dir(game)) {
-			return fail(say(text::MISSING_FOLDER, { game.filename().wstring() }));
+			return fail(say(texts::MISSING_FOLDER, { game.filename().wstring() }));
 		}
 		const fs::path  exe = app_dir(libraries, engine->app) / engine->exe;
 		std::error_code ec;
 		if (!fs::exists(exe, ec)) {
-			return fail(say(text::MISSING_ENGINE_EXE, { engine->app.name, engine->exe }));
+			return fail(say(texts::MISSING_ENGINE_EXE, { engine->app.name, engine->exe }));
 		}
 
 		if (!ensure_steam() || !ensure_minecraft(game)) {
@@ -522,7 +529,7 @@ namespace
 		PROCESS_INFORMATION process{};
 		if (!::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, exe.parent_path().c_str(), &startup, &process)) {
 			const DWORD error = ::GetLastError();
-			return fail(say(text::ENGINE_WONT_START, { exe.wstring(), std::to_wstring(error) }));
+			return fail(say(texts::ENGINE_WONT_START, { exe.wstring(), std::to_wstring(error) }));
 		}
 		::CloseHandle(process.hThread);
 		::CloseHandle(process.hProcess);
@@ -533,13 +540,12 @@ namespace
 	/// for tests and translators. starts nothing.
 	int write_strings(const fs::path& file)
 	{
-		wchar_t     chosen[64]{};
-		const DWORD length = ::GetEnvironmentVariableW(LANGUAGE_VARIABLE, chosen, static_cast<DWORD>(std::size(chosen)));
-		wchar_t     windows[16];
+		const std::wstring chosen = language_variable();
+		wchar_t            windows[16];
 		std::swprintf(windows, std::size(windows), L"0x%04X", static_cast<unsigned>(::GetUserDefaultUILanguage()));
 		std::wstring all = std::wstring(L"language: ") + (russian ? L"ru" : L"en") + L"\n" + LANGUAGE_VARIABLE + L": " +
-			(length > 0 && length < std::size(chosen) ? chosen : L"(not set)") + L"\nwindows display language: " + windows + L"\n";
-		for (const Text* each : text::ALL) {
+			(chosen.empty() ? L"(not set)" : chosen) + L"\nwindows display language: " + windows + L"\n";
+		for (const Text* each : texts::ALL) {
 			all += L"---\n";
 			all += say(*each);
 			all += L'\n';

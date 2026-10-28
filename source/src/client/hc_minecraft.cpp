@@ -79,7 +79,7 @@ namespace halfcraft
 				if (prism::start(bundle_, error)) {
 					state_ = State::kStarting;
 				} else {
-					log_warning("%ls", error.c_str());
+					log_warning("couldn't start prism: %ls", error.c_str());
 					failure_ = L"Couldn't start Minecraft: " + error;
 					state_ = State::kFailed;
 				}
