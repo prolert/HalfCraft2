@@ -1,11 +1,15 @@
 // server.dll: each campaign's own characters (core/hc_campaign_models.h says why and which). as a level loads, before
 // its entities precache anything, the game folder gets the versions the map's campaign plays (half-life 2's, episode
 // one's or lost coast's), read from that campaign's own content, or none on episode two's maps, whose merged content is
-// its own. only when that set changes: the model cache lets go of every model involved first, then the files go and
-// come, each checked against what it was read from, and halfcraft-campaign-models.txt, written last, says what's
-// there. a level the client still has entities of (a changelevel across campaigns typed into the console) keeps the
-// set it has: the client's models point into the cache's data. once the level is in, the log says which version of
-// each character it plays, and hc_debug_model shows any entity's.
+// its own. only when that set changes: the model cache lets go of every model involved, then every file that has to go
+// is checked to be free to go and the disk to have room, before anything changes; then the files go and come, each
+// checked against what it was read from, and halfcraft-campaign-models.txt, written last, says what's there. a file the
+// folder already has as the new set wants it stays. should something fail halfway after all (a file another program
+// grabbed in between, a full disk), every copy goes, and what can't is named in the log as a mix, which the next level
+// tries again. a level the client still has entities of (a changelevel across campaigns typed into the console) keeps
+// the set it has: the client's models point into the cache's data. a menu background map writes nothing: it keeps the
+// set when its files check out, else it takes the copies out. once the level is in, the log says which version of each
+// character it plays, and hc_debug_model shows any entity's.
 
 #include "cbase.h"
 #include "datacache/imdlcache.h"
@@ -16,13 +20,14 @@
 #include "tier1/utlbuffer.h"
 
 #include "tier0/valve_minmax_off.h"
-#include <cctype>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "core/hc_campaign_models.h"
+#include "core/hc_files.h"
 #include "core/hc_log.h"
 #include "core/hc_module.h"
 #include "shared/hc_bridge.h"
@@ -37,13 +42,15 @@ namespace
 {
 	using halfcraft::CampaignModelState;
 	using halfcraft::ModelSet;
+	using State = std::optional<CampaignModelState>;
 
 	constexpr const char* GAME_FOLDER = "DEFAULT_WRITE_PATH";  // the game folder: first on GAME
 	constexpr const char* STATE_FILE = "halfcraft-campaign-models.txt";
 	constexpr const char* MODEL_SOUNDS_CACHE = "modelsounds.cache";  // in the game folder (MOD)
 	constexpr int         REMOVE_TRIES = 5;                          // an antivirus may hold a file it just saw written
 	constexpr unsigned    REMOVE_RETRY_MS = 50;
-	constexpr std::size_t LOG_LINE = 850;  // what one log line holds of a list (hc_log's lines are 1 kB)
+	constexpr long long   SPARE_BYTES = 64ll << 20;  // what a swap leaves free on the disk, at least
+	constexpr std::size_t LOG_LINE = 850;            // what one log line holds of a list (hc_log's lines are 1 kB)
 
 	/// the game's files, through the engine's file system.
 	class GameFiles final : public halfcraft::ModelFileSource
@@ -72,25 +79,26 @@ namespace
 	};
 
 	/// "models/alyx.mdl" as the log shows it: alyx
-	std::string short_name(std::string name)
+	std::string short_name(const std::string& name)
 	{
-		for (char& c : name) {
-			c = c == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		std::string shown = halfcraft::normal_model_name(name);
+		if (shown.rfind("models/", 0) == 0) {
+			shown.erase(0, 7);
 		}
-		if (name.rfind("models/", 0) == 0) {
-			name.erase(0, 7);
+		if (shown.size() > 4 && shown.compare(shown.size() - 4, 4, ".mdl") == 0) {
+			shown.erase(shown.size() - 4);
 		}
-		if (name.size() > 4 && name.compare(name.size() - 4, 4, ".mdl") == 0) {
-			name.erase(name.size() - 4);
-		}
-		return name;
+		return shown;
 	}
 
-	std::string hex(std::uint32_t value)
+	std::string set_text(ModelSet set)
 	{
-		char text[16];
-		V_snprintf(text, sizeof(text), "%08x", static_cast<unsigned>(value));
-		return text;
+		return set == ModelSet::kEpisodeTwo ? std::string("the merged models (episode two's)") : std::string(halfcraft::model_set_name(set)) + "'s models";
+	}
+
+	std::string state_text(const State& state)
+	{
+		return state ? set_text(state->set) : std::string("what the game folder has");
 	}
 
 	const char* load_type()
@@ -116,7 +124,7 @@ namespace
 		return in_level && in_level() != 0;
 	}
 
-	std::optional<CampaignModelState> read_state()
+	State read_state()
 	{
 		if (!filesystem->FileExists(STATE_FILE, GAME_FOLDER)) {
 			return std::nullopt;
@@ -136,6 +144,11 @@ namespace
 		return filesystem->WriteFile(STATE_FILE, GAME_FOLDER, buffer) && filesystem->Size(STATE_FILE, GAME_FOLDER) == text.size();
 	}
 
+	long folder_size(const std::string& name)
+	{
+		return filesystem->FileExists(name.c_str(), GAME_FOLDER) ? static_cast<long>(filesystem->Size(name.c_str(), GAME_FOLDER)) : -1;
+	}
+
 	/// takes a file out of the game folder; false when it's still there
 	bool remove_file(const std::string& name)
 	{
@@ -148,7 +161,7 @@ namespace
 		return !filesystem->FileExists(name.c_str(), GAME_FOLDER);
 	}
 
-	/// writes a file into the game folder and checks it's all there; a file that isn't goes again
+	/// writes a file into the game folder; true when it's all there
 	bool write_file(const halfcraft::PlannedFile& file)
 	{
 		const std::size_t slash = file.name.rfind('/');
@@ -157,29 +170,85 @@ namespace
 		}
 		CUtlBuffer buffer;
 		buffer.Put(file.data.data(), static_cast<int>(file.data.size()));
-		if (!file.data.empty() && filesystem->WriteFile(file.name.c_str(), GAME_FOLDER, buffer) &&
-			filesystem->Size(file.name.c_str(), GAME_FOLDER) == file.data.size()) {
-			return true;
+		return !file.data.empty() && filesystem->WriteFile(file.name.c_str(), GAME_FOLDER, buffer) && folder_size(file.name) == static_cast<long>(file.data.size());
+	}
+
+	/// every file of the lists' (and the state's) the game folder has
+	std::vector<std::string> copies_present(const State& state)
+	{
+		std::vector<std::string> names = halfcraft::campaign_model_files();
+		if (state) {
+			for (const halfcraft::CampaignModelFile& file : state->files) {
+				names.push_back(file.name);
+			}
 		}
-		remove_file(file.name);
-		return false;
+		std::vector<std::string> present;
+		for (const std::string& name : names) {
+			if (folder_size(name) >= 0 && std::find(present.begin(), present.end(), name) == present.end()) {
+				present.push_back(name);
+			}
+		}
+		return present;
+	}
+
+	/// the folder's own path, the first of DEFAULT_WRITE_PATH's
+	std::string game_folder_path()
+	{
+		char paths[1024] = {};
+		filesystem->GetSearchPath(GAME_FOLDER, false, paths, static_cast<int>(sizeof(paths)));
+		std::string       path = paths;
+		const std::size_t end = path.find(';');
+		return end == std::string::npos ? path : path.substr(0, end);
+	}
+
+	/// why the swap can't start without risking a half-changed folder: a file that has to go but couldn't now (another
+	/// program has it open), or a disk without room for the files that come; nullopt: it can
+	std::optional<std::string> blocker(const halfcraft::CampaignModelSwap& swap, const halfcraft::ModelSetPlan& plan)
+	{
+		long long needed = 0;
+		for (const std::size_t index : swap.write) {
+			needed += static_cast<long long>(plan.files[index].data.size());
+		}
+		const long long free = halfcraft::free_bytes(game_folder_path().c_str());
+		if (needed && free >= 0 && free < needed + SPARE_BYTES) {
+			return "the disk has " + std::to_string(free >> 20) + " MB free, and the copies need " + std::to_string(needed >> 20) + " MB";
+		}
+		std::vector<std::string> going = swap.remove;
+		going.emplace_back(STATE_FILE);
+		for (const std::string& name : going) {
+			char path[1024] = {};
+			if (filesystem->RelativePathToFullPath(name.c_str(), GAME_FOLDER, path, static_cast<int>(sizeof(path))) && path[0] && !halfcraft::file_deletable(path)) {
+				return name + " is open in another program";
+			}
+		}
+		return std::nullopt;
 	}
 
 	/// the model cache lets go of every model the files change, and of those that include them, so whatever reads them
-	/// next reads the game folder's; returns how many were loaded
-	int flush_models()
+	/// next reads the game folder's, a model that failed to load before included; returns how many were loaded
+	int flush_models(const State& state)
 	{
+		std::vector<std::string> names = halfcraft::campaign_models_to_flush();
+		if (state) {
+			for (const halfcraft::PlannedModel& model : state->models) {
+				if (std::find(names.begin(), names.end(), model.name) == names.end()) {
+					names.push_back(model.name);  // from older lists
+				}
+			}
+		}
 		mdlcache->FinishPendingLoads();
 		filesystem->AsyncFinishAll();
+		// the cache's own mutex, against the queued renderer's thread
 		MDLCACHE_CRITICAL_SECTION();
 		int loaded = 0;
-		for (const std::string& name : halfcraft::campaign_models_to_flush()) {
+		for (const std::string& name : names) {
 			const MDLHandle_t handle = mdlcache->FindMDL(name.c_str());
 			if (handle == MDLHANDLE_INVALID) {
 				continue;
 			}
 			loaded += mdlcache->GetRef(handle) > 1 ? 1 : 0;
 			mdlcache->Flush(handle, MDLCACHE_FLUSH_ALL);
+			mdlcache->ResetErrorModelStatus(handle);
 			mdlcache->Release(handle);
 		}
 		return loaded;
@@ -212,6 +281,20 @@ namespace
 		}
 	}
 
+	/// what a model's checksum means here: "half-life 2's" when it's the version the game folder has of it
+	std::string version_of(const State& state, const std::string& name, std::uint32_t checksum)
+	{
+		if (state) {
+			const std::string model = halfcraft::normal_model_name(name);
+			for (const halfcraft::PlannedModel& planned : state->models) {
+				if (planned.name == model && planned.checksum == checksum) {
+					return std::string(halfcraft::model_set_name(state->set)) + "'s";
+				}
+			}
+		}
+		return "";
+	}
+
 	class CampaignModels final : public CAutoGameSystem
 	{
 	public:
@@ -222,22 +305,28 @@ namespace
 		{
 			const char*    map = STRING(gpGlobals->mapname);
 			const ModelSet wanted = halfcraft::model_set_of(map);
-			const auto     state = read_state();
+			State          state = read_state();
+			if (!state && remembered_) {  // a state that couldn't be written: the folder is as it says
+				state = remembered_;
+				if (write_state(*remembered_)) {
+					remembered_.reset();
+				}
+			}
 			if (gpGlobals->eLoadType == MapLoad_Background) {
-				halfcraft::log_info("campaign models: the menu's %s keeps %s", map, state ? set_text(state->set).c_str() : "what the game folder has");
+				background(map, state);
 				return;
 			}
 			if (state && current(*state, wanted)) {
 				return;
 			}
-			if (!state && wanted == ModelSet::kEpisodeTwo && !any_copies()) {
+			if (!state && wanted == ModelSet::kEpisodeTwo && copies_present(state).empty()) {
 				write_state(empty_state());  // a game folder that never had any
 				return;
 			}
 			if (client_in_level()) {
 				halfcraft::log_warning("campaign models: the client still has the last level's entities as %s (%s) loads: it keeps %s; "
 									   "a new game or a load there gives it %s",
-					map, load_type(), state ? set_text(state->set).c_str() : "what the game folder has", set_text(wanted).c_str());
+					map, load_type(), state_text(state).c_str(), set_text(wanted).c_str());
 				return;
 			}
 			swap(map, wanted, state);
@@ -247,31 +336,37 @@ namespace
 		void LevelInitPostEntity() override
 		{
 			const char*              map = STRING(gpGlobals->mapname);
-			const auto               state = read_state();
+			State                    state = read_state();
 			std::vector<std::string> played, wrong;
+			if (!state) {
+				state = remembered_;
+			}
 			for (const char* root : halfcraft::CAMPAIGN_CHARACTERS) {
 				const int          index = modelinfo->GetModelIndex(root);
 				const studiohdr_t* header = index >= 0 ? modelinfo->GetStudiomodel(modelinfo->GetModel(index)) : nullptr;
 				if (!header) {
 					continue;
 				}
-				std::string text = short_name(root) + " " + hex(static_cast<std::uint32_t>(header->checksum));
-				check(state, root, static_cast<std::uint32_t>(header->checksum), wrong);
-				std::string includes;
+				const auto checksum = static_cast<std::uint32_t>(header->checksum);
+				check(state, root, checksum, wrong);
+				std::vector<std::string> includes;
 				for (int i = 0; i < header->numincludemodels; ++i) {
-					const char*         include = header->pModelGroup(i)->pszName();
-					const MDLHandle_t   handle = mdlcache->FindMDL(include);
-					const studiohdr_t*  included = handle != MDLHANDLE_INVALID ? mdlcache->GetStudioHdr(handle) : nullptr;
-					const std::uint32_t checksum = included ? static_cast<std::uint32_t>(included->checksum) : 0;
-					includes += (includes.empty() ? "" : ", ") + short_name(include) + " " + (included ? hex(checksum) : std::string("missing"));
+					const char*        include = header->pModelGroup(i)->pszName();
+					const MDLHandle_t  handle = mdlcache->FindMDL(include);
+					const studiohdr_t* included = handle != MDLHANDLE_INVALID ? mdlcache->GetStudioHdr(handle) : nullptr;
 					if (included) {
-						check(state, include, checksum, wrong);
+						check(state, include, static_cast<std::uint32_t>(included->checksum), wrong);
 					}
+					includes.push_back(short_name(include) + " " + (included ? halfcraft::checksum_text(static_cast<std::uint32_t>(included->checksum)) : std::string("missing")));
 					if (handle != MDLHANDLE_INVALID) {
 						mdlcache->Release(handle);
 					}
 				}
-				played.push_back(text + (includes.empty() ? "" : " (" + includes + ")"));
+				std::string text = short_name(root) + " " + halfcraft::checksum_text(checksum);
+				if (!includes.empty()) {
+					text += " (" + halfcraft::campaign_models_detail::joined(includes) + ")";
+				}
+				played.push_back(text);
 			}
 			if (!played.empty()) {
 				log_list(std::string("campaign models: ") + map + " plays " + (state ? set_text(state->set) : "the merged models") + ": ", played);
@@ -279,27 +374,13 @@ namespace
 			for (const std::string& line : wrong) {
 				halfcraft::log_warning("campaign models: %s: %s", map, line.c_str());
 			}
-		}
-
-		/// what a model's checksum means here: "half-life 2's" when it's the version the game folder has of it
-		static std::string version_of(const std::optional<CampaignModelState>& state, const std::string& name, std::uint32_t checksum)
-		{
-			if (state) {
-				for (const auto& [model, planned] : state->models) {
-					if (model == "models/" + short_name(name) + ".mdl" && planned == checksum) {
-						return std::string(halfcraft::model_set_name(state->set)) + "'s";
-					}
-				}
+			if (!mixed_.empty()) {
+				halfcraft::log_warning("campaign models: %s plays a mix: the game folder still has files of %s, the rest of them comes from the merged content",
+					map, halfcraft::campaign_models_detail::joined(mixed_).c_str());
 			}
-			return "";
 		}
 
 	private:
-		static std::string set_text(ModelSet set)
-		{
-			return set == ModelSet::kEpisodeTwo ? std::string("the merged models (episode two's)") : std::string(halfcraft::model_set_name(set)) + "'s models";
-		}
-
 		static CampaignModelState empty_state()
 		{
 			CampaignModelState state;
@@ -308,114 +389,156 @@ namespace
 			return state;
 		}
 
-		static bool any_copies()
-		{
-			for (const std::string& name : halfcraft::campaign_model_files()) {
-				if (filesystem->FileExists(name.c_str(), GAME_FOLDER)) {
-					return true;
-				}
-			}
-			return false;
-		}
-
 		/// a model the game folder has a version of that the level doesn't play
-		static void check(const std::optional<CampaignModelState>& state, const char* name, std::uint32_t checksum, std::vector<std::string>& wrong)
+		static void check(const State& state, const char* name, std::uint32_t checksum, std::vector<std::string>& wrong)
 		{
 			if (!state) {
 				return;
 			}
-			const std::string model = "models/" + short_name(name) + ".mdl";
-			for (const auto& [planned_name, planned] : state->models) {
-				if (planned_name == model && planned != checksum) {
-					wrong.push_back(model + " is " + hex(checksum) + ", expected " + halfcraft::model_set_name(state->set) + "'s " + hex(planned));
+			const std::string model = halfcraft::normal_model_name(name);
+			for (const halfcraft::PlannedModel& planned : state->models) {
+				if (planned.name == model && planned.checksum != checksum) {
+					wrong.push_back(model + " is " + halfcraft::checksum_text(checksum) + ", expected " + halfcraft::model_set_name(state->set) + "'s " +
+						halfcraft::checksum_text(planned.checksum));
 				}
 			}
 		}
 
-		/// whether the game folder holds what the state says, for the set wanted, as the lists are now; the first time
-		/// a process asks, also whether its sources are still what they were (a pak valve updated)
-		bool current(const CampaignModelState& state, ModelSet wanted)
+		/// whether the game folder still holds every file the state says, as big as it says
+		static bool intact(const CampaignModelState& state)
 		{
-			if (state.list_hash != halfcraft::campaign_model_list_hash() || state.set != wanted) {
-				return false;
-			}
 			for (const halfcraft::CampaignModelFile& file : state.files) {
-				const char* name = file.name.c_str();
-				if (!filesystem->FileExists(name, GAME_FOLDER) || static_cast<long>(filesystem->Size(name, GAME_FOLDER)) != file.size) {
-					return false;
-				}
-				if (!sources_checked_ && (!filesystem->FileExists(name, file.source.c_str()) || static_cast<long>(filesystem->Size(name, file.source.c_str())) != file.source_size)) {
+				if (folder_size(file.name) != file.size) {
 					return false;
 				}
 			}
-			sources_checked_ = true;
 			return true;
 		}
 
-		/// the game folder gets the set wanted: the cache lets go, what was there goes, the plan's files come, the state
-		/// comes last. a file that can't go or come leaves no state, so the next level tries again
-		void swap(const char* map, ModelSet wanted, const std::optional<CampaignModelState>& state)
+		/// a menu background map writes no copies: it keeps the set when its files check out, else takes them out
+		void background(const char* map, const State& state)
+		{
+			if (state && intact(*state)) {
+				halfcraft::log_info("campaign models: the menu's %s keeps %s", map, set_text(state->set).c_str());
+				return;
+			}
+			if (copies_present(state).empty()) {
+				halfcraft::log_info("campaign models: the menu's %s plays the merged models", map);
+				return;
+			}
+			if (client_in_level()) {
+				halfcraft::log_warning("campaign models: the client still has the last level's entities as the menu's %s loads: it keeps %s", map, state_text(state).c_str());
+				return;
+			}
+			halfcraft::log_info("campaign models: the game folder's copies don't check out: the menu's %s takes them out", map);
+			swap(map, ModelSet::kEpisodeTwo, state);
+		}
+
+		/// whether the game folder holds what the state says, for the set wanted, as the lists and rules are now; the
+		/// first time a process asks, also whether its sources still give what was copied (a pak valve updated)
+		bool current(const CampaignModelState& state, ModelSet wanted)
+		{
+			if (state.list_hash != halfcraft::campaign_model_list_hash() || state.set != wanted || !intact(state)) {
+				return false;
+			}
+			if (!sources_checked_) {
+				if (const auto stale = halfcraft::stale_campaign_models(state, GameFiles())) {
+					halfcraft::log_info("campaign models: %s: copies again", stale->c_str());
+					return false;
+				}
+				sources_checked_ = true;
+			}
+			mixed_.clear();
+			return true;
+		}
+
+		/// a swap that stopped halfway: every copy goes, so the level plays the merged models, and what can't go is named
+		void undo(const char* map, const State& old, const std::string& why)
+		{
+			for (const std::string& name : copies_present(old)) {
+				remove_file(name);
+			}
+			forget_model_sounds();
+			mixed_ = halfcraft::models_of_files(copies_present(old));
+			if (mixed_.empty()) {
+				halfcraft::log_warning("campaign models: %s: %s plays the merged models; the next level tries again", why.c_str(), map);
+			} else {
+				halfcraft::log_warning("campaign models: %s: %s plays a mix: the game folder still has files of %s, the rest of them comes from the merged content; "
+									   "the next level tries again",
+					why.c_str(), map, halfcraft::campaign_models_detail::joined(mixed_).c_str());
+			}
+		}
+
+		/// the game folder gets the set wanted: the cache lets go, everything that has to go is checked to be free to go
+		/// and the disk to have room, then the state goes, the old files go, the new ones come, the state comes last
+		void swap(const char* map, ModelSet wanted, const State& state)
 		{
 			const double            started = Plat_FloatTime();
-			GameFiles               files;
+			const GameFiles         files;
 			halfcraft::ModelSetPlan plan = halfcraft::plan_model_set(wanted, files);
 			for (const std::string& skipped : plan.skipped) {
 				halfcraft::log_warning("campaign models: %s's models: skipped %s", halfcraft::model_set_name(wanted), skipped.c_str());
 			}
-			const int                loaded = flush_models();
-			std::vector<std::string> old = halfcraft::campaign_model_files();
-			if (state) {
-				for (const halfcraft::CampaignModelFile& file : state->files) {
-					old.push_back(file.name);
-				}
+			if (wanted != ModelSet::kEpisodeTwo && plan.models.empty()) {
+				halfcraft::log_warning("campaign models: nothing of %s to copy: %s keeps %s", set_text(wanted).c_str(), map, state_text(state).c_str());
+				return;
 			}
-			int removed = 0;
-			remove_file(STATE_FILE);
-			for (const std::string& name : old) {
-				const bool there = filesystem->FileExists(name.c_str(), GAME_FOLDER);
-				if (there && !remove_file(name)) {
-					halfcraft::log_warning("campaign models: couldn't remove %s from the game folder: %s keeps a mix; the next level tries again", name.c_str(), map);
+			const bool trusted = state && state->list_hash == halfcraft::campaign_model_list_hash();
+			const auto steps = halfcraft::plan_campaign_model_swap(state, trusted, plan, folder_size);
+			const int  loaded = flush_models(state);
+			if (const auto why = blocker(steps, plan)) {
+				halfcraft::log_warning("campaign models: %s: %s keeps %s; the next level tries again", why->c_str(), map, state_text(state).c_str());
+				return;
+			}
+			if (!remove_file(STATE_FILE)) {
+				halfcraft::log_warning("campaign models: couldn't remove %s: %s keeps %s; the next level tries again", STATE_FILE, map, state_text(state).c_str());
+				return;
+			}
+			for (const std::string& name : steps.remove) {
+				if (!remove_file(name)) {
+					undo(map, state, "couldn't remove " + name);
 					return;
 				}
-				removed += there ? 1 : 0;
+			}
+			for (const std::size_t index : steps.write) {
+				if (!write_file(plan.files[index])) {
+					undo(map, state, "couldn't write " + plan.files[index].name);
+					return;
+				}
 			}
 			CampaignModelState written;
 			written.list_hash = halfcraft::campaign_model_list_hash();
 			written.set = wanted;
 			for (const halfcraft::PlannedFile& file : plan.files) {
-				if (!write_file(file)) {
-					for (const halfcraft::CampaignModelFile& done : written.files) {
-						remove_file(done.name);
-					}
-					halfcraft::log_warning("campaign models: couldn't write %s into the game folder: %s plays the merged models; the next level tries again", file.name.c_str(), map);
-					return;
-				}
 				written.files.push_back({ file.name, static_cast<long>(file.data.size()), file.source, files.size(file.name, file.source) });
 			}
-			for (const halfcraft::PlannedModel& model : plan.models) {
-				written.models.emplace_back(model.name, model.checksum);
-			}
+			written.models = plan.models;
 			if (!write_state(written)) {
-				halfcraft::log_warning("campaign models: couldn't write %s into the game folder: the next level checks the models again", STATE_FILE);
+				remembered_ = written;
+				halfcraft::log_warning("campaign models: couldn't write %s into the game folder: the next levels try again", STATE_FILE);
 			}
 			sources_checked_ = true;
+			mixed_.clear();
 			forget_model_sounds();
-			const std::string from = state ? set_text(state->set) : std::string("an earlier run's");
-			if (plan.files.empty()) {
-				halfcraft::log_info("campaign models: %s on %s (%s): removed %d files (%s); %d loaded models flushed; %.0f ms",
-					set_text(wanted).c_str(), map, load_type(), removed, from.c_str(), loaded, (Plat_FloatTime() - started) * 1000.0);
-				return;
+			std::string done = std::to_string(steps.write.size()) + " written, " + std::to_string(steps.keep.size()) + " kept, " + std::to_string(steps.remove.size()) +
+				" removed (" + state_text(state) + ")";
+			if (!plan.files.empty()) {
+				std::vector<std::string> sources;
+				for (const char* source : halfcraft::model_set_sources(wanted)) {
+					sources.emplace_back(source);
+				}
+				char megabytes[32];
+				V_snprintf(megabytes, sizeof(megabytes), "%.1f", static_cast<double>(plan.bytes()) / 1e6);
+				done = std::to_string(plan.models.size()) + " models, " + std::to_string(plan.files.size()) + " files (" + megabytes + " MB) from " +
+					halfcraft::campaign_models_detail::joined(sources) + ": " + done;
 			}
-			std::string sources;
-			for (const char* source : halfcraft::model_set_sources(wanted)) {
-				sources += (sources.empty() ? "" : ", ") + std::string(source);
-			}
-			halfcraft::log_info("campaign models: %s on %s (%s): %d models, %d files (%.1f MB) from %s; removed %d files (%s); %d loaded models flushed; %.0f ms",
-				set_text(wanted).c_str(), map, load_type(), static_cast<int>(plan.models.size()), static_cast<int>(plan.files.size()), plan.bytes() / 1e6,
-				sources.c_str(), removed, from.c_str(), loaded, (Plat_FloatTime() - started) * 1000.0);
+			halfcraft::log_info("campaign models: %s on %s (%s): %s; %d loaded models flushed; %.0f ms", set_text(wanted).c_str(), map, load_type(), done.c_str(), loaded,
+				(Plat_FloatTime() - started) * 1000.0);
 		}
 
-		bool sources_checked_ = false;  // this process has seen the state's sources unchanged
+		bool                     sources_checked_ = false;  // this process has seen the state's sources still give the copies
+		State                    remembered_;               // a state written to the folder's files but not to its file
+		std::vector<std::string> mixed_;                    // the models a swap that stopped halfway left files of
 	};
 
 	CampaignModels g_campaign_models;
@@ -428,7 +551,7 @@ CON_COMMAND(hc_debug_model, "halfcraft: an entity's model, its version (checksum
 		halfcraft::log_info("model: hc_debug_model <targetname or classname> [sequence ...]");
 		return;
 	}
-	const auto  state = read_state();
+	const State state = read_state();
 	const char* name = args[1];
 	int         found = 0;
 	const auto  report = [&](CBaseEntity* entity) {
@@ -440,8 +563,8 @@ CON_COMMAND(hc_debug_model, "halfcraft: an entity's model, its version (checksum
 			return;
 		}
 		const auto        checksum = static_cast<std::uint32_t>(studio->GetRenderHdr()->checksum);
-		const std::string version = CampaignModels::version_of(state, STRING(entity->GetModelName()), checksum);
-		const std::string shown = hex(checksum) + (version.empty() ? "" : " (" + version + ")");
+		const std::string version = version_of(state, STRING(entity->GetModelName()), checksum);
+		const std::string shown = halfcraft::checksum_text(checksum) + (version.empty() ? "" : " (" + version + ")");
 		std::string       sequences;
 		for (int i = 2; i < args.ArgC(); ++i) {
 			sequences += std::string(i > 2 ? ", " : "; ") + args[i] + (animating->LookupSequence(args[i]) >= 0 ? " yes" : " no");

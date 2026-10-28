@@ -1098,6 +1098,8 @@ namespace
 	public:
 		void add(const char* path_id, const std::string& name, std::vector<std::uint8_t> data) { files_[{ path_id, name }] = std::move(data); }
 
+		void remove(const char* path_id, const std::string& name) { files_.erase({ path_id, name }); }
+
 		/// a file the file system says is bigger than what a read gives
 		void cut_short(const char* path_id, const std::string& name) { short_.insert({ path_id, name }); }
 
@@ -1137,10 +1139,10 @@ namespace
 		}
 	}
 
-	bool planned(const ModelSetPlan& plan, const std::string& name, const char* source, std::uint32_t checksum)
+	bool planned(const ModelSetPlan& plan, const std::string& name, const std::string& source, std::uint32_t checksum)
 	{
 		return std::any_of(plan.models.begin(), plan.models.end(),
-			[&](const PlannedModel& model) { return model.name == name && std::strcmp(model.source, source) == 0 && model.checksum == checksum; });
+			[&](const PlannedModel& model) { return model.name == name && model.source == source && model.checksum == checksum; });
 	}
 
 	bool has_file(const ModelSetPlan& plan, const std::string& name)
@@ -1158,7 +1160,7 @@ namespace
 	{
 		const auto data = studio_model(0x4314b420, { "models/Alyx_Animations.mdl", "models\\humans\\female_shared.mdl" }, "models/Alyx_gestures.ani");
 		const auto header = read_studio_header(data.data(), data.size());
-		CHECK(header && header->version == 48 && header->checksum == 0x4314b420);
+		CHECK(header && header->checksum == 0x4314b420);
 		CHECK(header && header->includes == std::vector<std::string>({ "models/alyx_animations.mdl", "models/humans/female_shared.mdl" }));
 		CHECK(header && header->anim_block == "models/alyx_gestures.ani");
 		const auto bare = studio_model(1, {}, "", 44);
@@ -1229,7 +1231,7 @@ namespace
 		add_character(files, "hc_ep1", "models/dog.mdl", 7);
 
 		const auto plan = plan_model_set(ModelSet::kHalfLife2, files);
-		CHECK(plan.skipped.empty());
+		CHECK(plan.skipped.empty() && plan.roots == 3);
 		CHECK(plan.models.size() == 3);
 		CHECK(planned(plan, "models/alyx.mdl", "hc_hl2", 1) && planned(plan, "models/alyx_animations.mdl", "hc_hl2", 2) &&
 			planned(plan, "models/blackout.mdl", "hc_hl2", 5));
@@ -1243,6 +1245,12 @@ namespace
 
 		const auto ep2 = plan_model_set(ModelSet::kEpisodeTwo, files);
 		CHECK(ep2.models.empty() && ep2.files.empty() && ep2.skipped.empty());
+
+		// a set whose own content has none of the characters (gameinfo.txt doesn't mount it) says so
+		const FakeModelFiles nothing;
+		const auto           none = plan_model_set(ModelSet::kHalfLife2, nothing);
+		CHECK(none.models.empty() && none.roots == 0 && none.skipped.size() == 1 && none.skipped[0].find("none of the characters is in hc_hl2") == 0);
+		CHECK(plan_model_set(ModelSet::kEpisodeTwo, nothing).skipped.empty());
 	}
 
 	void test_plan_episode_one_and_lost_coast()
@@ -1300,11 +1308,19 @@ namespace
 		CHECK(skipped(mismatch, "models/alyx.mdl", "models/alyx.vvd's checksum 00000063 isn't the .mdl's 00000001"));
 		CHECK(!has_file(mismatch, "models/alyx.mdl") && !has_file(mismatch, "models/alyx_gestures.mdl") && planned(mismatch, "models/lamarr.mdl", "hc_hl2", 3));
 
-		const auto no_block = with([](FakeModelFiles& files) { files.add("hc_hl2", "models/alyx_gestures.mdl", studio_model(2, {}, "models/elsewhere.ani")); });
-		CHECK(skipped(no_block, "models/alyx.mdl", "models/elsewhere.ani isn't in hc_hl2") && no_block.models.size() == 1);
+		const auto no_block = with([](FakeModelFiles& files) { files.remove("hc_hl2", "models/alyx_gestures.ani"); });
+		CHECK(skipped(no_block, "models/alyx.mdl", "models/alyx_gestures.ani isn't in hc_hl2") && no_block.models.size() == 1);
+
+		// leftovers are found by <stem>.ani: a copy streaming from another name couldn't be taken out again
+		const auto elsewhere = with([](FakeModelFiles& files) { files.add("hc_hl2", "models/alyx_gestures.mdl", studio_model(2, {}, "models/elsewhere.ani")); });
+		CHECK(skipped(elsewhere, "models/alyx.mdl", "models/alyx_gestures.mdl streams its animations from models/elsewhere.ani, not models/alyx_gestures.ani"));
+		CHECK(elsewhere.models.size() == 1);
 
 		const auto leak = with([](FakeModelFiles& files) { files.add("hc_ep2", "models/alyx.phy", companion_file(12, 11)); });
 		CHECK(skipped(leak, "models/alyx.mdl", "models/alyx.phy isn't in hc_hl2 but hc_ep2 has one"));
+		// lost coast's pak comes after half-life 2's on GAME but isn't half-life 2's own content: it slips in all the same
+		const auto later = with([](FakeModelFiles& files) { files.add("hc_lc", "models/alyx.phy", companion_file(12, 1)); });
+		CHECK(skipped(later, "models/alyx.mdl", "models/alyx.phy isn't in hc_hl2 but hc_lc has one"));
 
 		const auto cut = with([](FakeModelFiles& files) { files.cut_short("hc_hl2", "models/alyx_gestures.ani"); });
 		CHECK(skipped(cut, "models/alyx.mdl", "couldn't be read whole") && !has_file(cut, "models/alyx_gestures.ani"));
@@ -1325,7 +1341,7 @@ namespace
 		CHECK(skipped(unlisted, "models/gman.mdl", "models/breen_anims.mdl would be copied but isn't in CAMPAIGN_MODELS_SWAPPED"));
 		CHECK(unlisted.models.size() == 3);
 
-		// a model another closure has whole stays when one with it falls apart
+		// a model another closure has whole stays when one with it falls apart, and the skipped line says so
 		const auto shared = with([](FakeModelFiles& files) {
 			add_character(files, "hc_hl2", "models/kleiner.mdl", 7, { "models/kleiner_gestures.mdl" });
 			add_character(files, "hc_hl2", "models/kleiner_monitor.mdl", 8, { "models/kleiner_gestures.mdl", "models/kleiner_lost.mdl" });
@@ -1333,7 +1349,9 @@ namespace
 			files.add("hc_ep2", "models/kleiner_gestures.mdl", studio_model(10));
 		});
 		CHECK(skipped(shared, "models/kleiner_monitor.mdl", "models/kleiner_lost.mdl isn't in the campaign's own content"));
+		CHECK(skipped(shared, "models/kleiner_monitor.mdl", "it still gets models/kleiner_gestures.mdl of this set through other characters"));
 		CHECK(planned(shared, "models/kleiner_gestures.mdl", "hc_hl2", 9) && shared.skipped.size() == 1);
+		CHECK(!skipped(mismatch, "models/alyx.mdl", "still gets"));
 	}
 
 	void test_campaign_model_names()
@@ -1347,6 +1365,14 @@ namespace
 		for (const char* character : CAMPAIGN_CHARACTERS) {
 			CHECK(std::string(character).rfind("models/", 0) == 0);
 		}
+
+		CHECK(model_of_file("models/Alyx_Gestures.ani") == std::string("models/alyx_gestures.mdl"));
+		CHECK(model_of_file("models\\zombie\\classic.dx90.vtx") == std::string("models/zombie/classic.mdl"));
+		CHECK(model_of_file("models/gman.mdl") == std::string("models/gman.mdl"));
+		CHECK(!model_of_file("halfcraft-campaign-models.txt"));
+		CHECK(models_of_files({ "models/alyx.vvd", "models/dog.ani", "models/alyx.mdl", "notes.txt" }) == std::vector<std::string>({ "models/alyx.mdl", "models/dog.mdl" }));
+		CHECK(normal_model_name("Models\\Humans\\Male_Shared.MDL") == "models/humans/male_shared.mdl");
+		CHECK(checksum_text(0x4314b420) == "4314b420" && checksum_text(7) == "00000007");
 	}
 
 	void test_campaign_model_state()
@@ -1356,13 +1382,13 @@ namespace
 		state.set = ModelSet::kLostCoast;
 		state.files.push_back({ "models/alyx.mdl", 480536, "hc_hl2", 480536 });
 		state.files.push_back({ "models/combine_soldier_anims.ani", 1234, "hc_lc", 1234 });
-		state.models.emplace_back("models/alyx.mdl", 0x4314b420);
+		state.models.push_back({ "models/alyx.mdl", "hc_hl2", 0x4314b420 });
 		const std::string text = format_campaign_model_state(state);
 		const auto        read = parse_campaign_model_state(text);
 		CHECK(read && read->list_hash == state.list_hash && read->set == ModelSet::kLostCoast);
 		CHECK(read && read->files.size() == 2 && read->files[1].name == "models/combine_soldier_anims.ani" && read->files[1].source == "hc_lc" &&
 			read->files[1].size == 1234 && read->files[1].source_size == 1234);
-		CHECK(read && read->models.size() == 1 && read->models[0].second == 0x4314b420u);
+		CHECK(read && read->models.size() == 1 && read->models[0].checksum == 0x4314b420u && read->models[0].source == "hc_hl2");
 
 		std::string crlf;
 		for (const char c : text) {
@@ -1376,13 +1402,73 @@ namespace
 
 		const std::string head = std::string(CAMPAIGN_MODEL_STATE_HEADER) + "\n";
 		CHECK(!parse_campaign_model_state(""));
-		CHECK(!parse_campaign_model_state("garbage\nlist 00000001\nset hl2\n"));
-		CHECK(!parse_campaign_model_state(head + "list 00000001\n"));                    // no set
-		CHECK(!parse_campaign_model_state(head + "list 00000001\nset ep3\n"));           // no such set
-		CHECK(!parse_campaign_model_state(head + "list 00000001\nset hl2\nfile x 1\n"));  // a line cut short
+		CHECK(!parse_campaign_model_state("halfcraft campaign models 1\nlist 00000001\nset hl2\n"));  // an older format
+		CHECK(!parse_campaign_model_state(head + "list 00000001\n"));                                 // no set
+		CHECK(!parse_campaign_model_state(head + "list 00000001\nset ep3\n"));                        // no such set
+		CHECK(!parse_campaign_model_state(head + "list 00000001\nset hl2\nfile x 1\n"));               // a line cut short
 		CHECK(!parse_campaign_model_state(head + "list 0000000g\nset hl2\n"));
 		CHECK(!parse_campaign_model_state(head + "list 00000001\nset hl2\nfile models/a.mdl -5 hc_hl2 3\n"));
+		CHECK(!parse_campaign_model_state(head + "list 00000001\nset hl2\nmodel models/a.mdl 00000001\n"));  // no source
 		CHECK(campaign_model_list_hash() != 0);
+	}
+
+	void test_stale_campaign_models()
+	{
+		FakeModelFiles files;
+		add_character(files, "hc_hl2", "models/alyx.mdl", 1);
+		add_character(files, "hc_ep2", "models/alyx.mdl", 11);
+		CampaignModelState state;
+		state.set = ModelSet::kHalfLife2;
+		state.files.push_back({ "models/alyx.mdl", files.size("models/alyx.mdl", "hc_hl2"), "hc_hl2", files.size("models/alyx.mdl", "hc_hl2") });
+		state.models.push_back({ "models/alyx.mdl", "hc_hl2", 1 });
+		CHECK(!stale_campaign_models(state, files));
+
+		auto bigger = files;
+		bigger.add("hc_hl2", "models/alyx.mdl", studio_model(1, { "models/alyx_more.mdl" }));
+		CHECK(stale_campaign_models(state, bigger) == std::string("models/alyx.mdl under hc_hl2 isn't the size it was"));
+		auto same_size = files;  // valve's update kept the size and changed the checksum
+		same_size.add("hc_hl2", "models/alyx.mdl", studio_model(2));
+		CHECK(stale_campaign_models(state, same_size) == std::string("models/alyx.mdl under hc_hl2 isn't the version copied"));
+		auto caught_up = files;  // episode two's is half-life 2's now: nothing to copy any more
+		caught_up.add("hc_ep2", "models/alyx.mdl", studio_model(1));
+		CHECK(stale_campaign_models(state, caught_up) == std::string("models/alyx.mdl is the merged mount's version now"));
+	}
+
+	void test_campaign_model_swap()
+	{
+		ModelSetPlan plan;
+		plan.files.push_back({ "models/alyx.mdl", "hc_hl2", std::vector<std::uint8_t>(100, 1) });
+		plan.files.push_back({ "models/alyx.vvd", "hc_hl2", std::vector<std::uint8_t>(50, 2) });
+		plan.files.push_back({ "models/combine_soldier_anims.mdl", "hc_lc", std::vector<std::uint8_t>(70, 3) });
+		CampaignModelState old;
+		old.set = ModelSet::kHalfLife2;
+		old.files.push_back({ "models/alyx.mdl", 100, "hc_hl2", 100 });           // the same, there: stays
+		old.files.push_back({ "models/alyx.vvd", 50, "hc_hl2", 50 });             // the same, but the folder's isn't: comes again
+		old.files.push_back({ "models/gman.mdl", 30, "hc_hl2", 30 });             // not wanted: goes
+		old.files.push_back({ "models/from_older_lists.mdl", 9, "hc_hl2", 9 });  // of an older list: goes too
+		std::map<std::string, long> folder{ { "models/alyx.mdl", 100 }, { "models/alyx.vvd", 49 }, { "models/gman.mdl", 30 },
+			{ "models/from_older_lists.mdl", 9 }, { "models/dog.ani", 5 } };  // dog.ani: a stray
+		const auto                  size = [&folder](const std::string& name) {
+			const auto found = folder.find(name);
+			return found == folder.end() ? -1L : found->second;
+		};
+		const auto swap = plan_campaign_model_swap(old, true, plan, size);
+		CHECK(swap.keep == std::vector<std::string>({ "models/alyx.mdl" }));
+		CHECK(swap.write == std::vector<std::size_t>({ 1, 2 }));
+		auto removed = swap.remove;
+		std::sort(removed.begin(), removed.end());
+		CHECK(removed == std::vector<std::string>({ "models/alyx.vvd", "models/dog.ani", "models/from_older_lists.mdl", "models/gman.mdl" }));
+
+		// a state of other lists keeps nothing: everything there goes, everything wanted comes
+		const auto untrusted = plan_campaign_model_swap(old, false, plan, size);
+		CHECK(untrusted.keep.empty() && untrusted.write.size() == 3 && untrusted.remove.size() == 5);
+		// lost coast after half-life 2: the same source and size of a file is the same file
+		CampaignModelState other_source = old;
+		other_source.files[0].source = "hc_ep1";
+		CHECK(plan_campaign_model_swap(other_source, true, plan, size).keep.empty());
+		// no state at all: whatever of the lists is there goes
+		const auto unknown = plan_campaign_model_swap(std::nullopt, false, plan, size);
+		CHECK(unknown.keep.empty() && unknown.remove.size() == 4 && unknown.write.size() == 3);  // not from_older_lists: no name for it
 	}
 }
 
@@ -1422,6 +1508,8 @@ int run_tests()
 	test_plan_leaves_out_broken_closures();
 	test_campaign_model_names();
 	test_campaign_model_state();
+	test_stale_campaign_models();
+	test_campaign_model_swap();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;

@@ -41,8 +41,9 @@ Coast's intro wait for). Each campaign's maps play its own: as a level of anothe
 one loads, `source/src/server/hc_campaign_models.cpp` copies that campaign's versions from its own content
 into the game folder, which is searched first (Half-Life 2's or Episode One's, about 20 MB; Lost Coast gets
 Half-Life 2's and its own soldiers' aiming animations), or takes them out on Episode Two's maps, whose
-merged content is its own; `halfcraft-campaign-models.txt` in the game folder says which are there, and the
-log names each character's version as a map loads. `python tools/game/campaign_models.py` checks the
+merged content is its own. It changes nothing unless every file that has to go can go (no other program has it
+open) and the disk has room, and a menu background map writes nothing; `halfcraft-campaign-models.txt` in the
+game folder says which are there, and the log names each character's version as a map loads. `python tools/game/campaign_models.py` checks the
 models it copies against the installed games (run it after Valve updates them). The game folders are put
 together by `tools/halfcraft/game_folder.py` from hl2dm-sp's campaign folders.
 

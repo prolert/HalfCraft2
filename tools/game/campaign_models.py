@@ -40,7 +40,10 @@ SETS = {
 }
 # studiohdr_t on disk
 MIN_HEADER = 408
-LOCAL_SEQUENCES, INCLUDES, ANIM_BLOCK_NAME = 188, 336, 348
+LENGTH, LOCAL_SEQUENCES, INCLUDES, ANIM_BLOCK_NAME = 76, 188, 336, 348
+MIN_VERSION, MAX_VERSION, MAX_INCLUDES = 44, 49, 256
+# the merged mount when it's episode two's own content: its plan has to be empty
+EPISODE_TWO = ("hc_ep2", "hc_ep1", "hc_hl2")
 SEQUENCE_BYTES = 212
 SEARCH_PATH = re.compile(r"^\s*([A-Za-z0-9_+]+)\s+(\S+)\s*(?://.*)?$")
 
@@ -140,18 +143,35 @@ class Model:
 MODELS: dict[tuple[str, str], Model | None] = {}
 
 
+def model_path(name: str, extension: str) -> bool:
+    """a name the game folder may get, as server.dll checks it: models/<something>.<extension>, no way out of models/."""
+    return name.startswith("models/") and len(name) > len("models/") + len(extension) and name.endswith(extension) and ".." not in name and ":" not in name
+
+
+def read_header(data: bytes) -> Model | None:
+    """a .mdl's header as server.dll's read_studio_header() takes it: None for anything it wouldn't trust."""
+    if len(data) < MIN_HEADER or data[:4] != b"IDST":
+        return None
+    version, checksum = struct.unpack_from("<iI", data, 4)
+    count, index = struct.unpack_from("<ii", data, INCLUDES)
+    name_index, blocks = struct.unpack_from("<ii", data, ANIM_BLOCK_NAME)
+    if not MIN_VERSION <= version <= MAX_VERSION or struct.unpack_from("<i", data, LENGTH)[0] != len(data) or not 0 <= count <= MAX_INCLUDES:
+        return None
+    try:
+        includes = tuple(normal(c_string(data, index + 8 * i + struct.unpack_from("<I", data, index + 8 * i + 4)[0])) for i in range(count))
+        anim_block = normal(c_string(data, name_index)) if blocks else ""
+    except (ValueError, struct.error):
+        return None
+    if not all(model_path(include, ".mdl") for include in includes) or (anim_block and not model_path(anim_block, ".ani")):
+        return None
+    return Model(checksum, includes, anim_block)
+
+
 def model_of(source: Source, name: str) -> Model | None:
-    """a .mdl's header (read once a run); None when it isn't a studio model (valve's install has empty loose ones)."""
+    """a .mdl's header (read once a run); None when server.dll wouldn't take it (valve's install has empty loose ones)."""
     key = (source.label, name)
     if key not in MODELS:
-        data = source.read(name)
-        if len(data) < MIN_HEADER or data[:4] != b"IDST":
-            MODELS[key] = None
-            return None
-        count, index = struct.unpack_from("<ii", data, INCLUDES)
-        includes = tuple(normal(c_string(data, index + 8 * i + struct.unpack_from("<i", data, index + 8 * i + 4)[0])) for i in range(count))
-        name_index, blocks = struct.unpack_from("<ii", data, ANIM_BLOCK_NAME)
-        MODELS[key] = Model(struct.unpack_from("<I", data, 8)[0], includes, normal(c_string(data, name_index)) if blocks else "")
+        MODELS[key] = read_header(source.read(name))
     return MODELS[key]
 
 
@@ -294,36 +314,48 @@ class Planner:
                 return self.own[name]
             model = model_of(found[1], name)
             if not model:
-                self.own[name] = f"{name} in {found[1].label} isn't a studio model"
+                self.own[name] = f"{name} under {found[0]} isn't a studio model server.dll can read"
                 return self.own[name]
             own = Own(found[0], found[1], model)
             winner = self.first_of(self.lists.merged, name)
-            theirs = model_of(winner[1], name) if winner else None
-            own.copied = bool(winner) and winner[0] != own.path_id and (not theirs or theirs.checksum != model.checksum)
-            if own.copied:
+            if winner and winner[0] != own.path_id:
+                theirs = model_of(winner[1], name)
+                own.copied = not theirs or theirs.checksum != model.checksum
+                if not theirs:
+                    own.error = f"{name}'s version under {winner[0]} couldn't be read"
+            if own.copied and not own.error:
                 self.add_files(name, own)
             self.own[name] = own
         return self.own[name]
+
+    def slip_in(self, path_id: str) -> list[str]:
+        """the merged sources whose version of a file the game would take for a copy that lacks it: those ahead of the
+        copy's source, and those outside the set's own content (as server.dll's slip_in_sources())."""
+        ahead = self.lists.merged[: self.lists.merged.index(path_id)] if path_id in self.lists.merged else list(self.lists.merged)
+        return [merged for merged in self.lists.merged if merged in ahead or merged not in self.path_ids]
 
     def add_files(self, name: str, own: Own) -> None:
         if name not in self.lists.swapped:
             own.error = f"{name} would be copied but isn't in CAMPAIGN_MODELS_SWAPPED"
             return
         own.files.append(name)
-        ahead = self.lists.merged[: self.lists.merged.index(own.path_id)] if own.path_id in self.lists.merged else []
+        stem = name.removesuffix(".mdl")
         for extension, offset in self.lists.companions:
-            companion = name.removesuffix(".mdl") + extension
+            companion = stem + extension
             if not own.source.has(companion):
-                if self.first_of(ahead, companion):
-                    own.error = f"{companion} isn't in {own.source.label} but a merged source ahead of it has one"
+                if other := self.first_of(self.slip_in(own.path_id), companion):
+                    own.error = f"{companion} isn't in {own.path_id} but {other[0]} has one, which the game would take with this .mdl"
                 continue
-            checksum = struct.unpack_from("<I", own.source.read(companion), offset)[0]
+            data = own.source.read(companion)
+            checksum = struct.unpack_from("<I", data, offset)[0] if len(data) >= offset + 4 else None
             if checksum != own.model.checksum:
-                own.error = f"{companion}'s checksum {checksum:08x} isn't the .mdl's {own.model.checksum:08x}"
+                own.error = f"{companion}'s checksum isn't the .mdl's {own.model.checksum:08x}"
             own.files.append(companion)
         if own.model.anim_block:
-            if not own.source.has(own.model.anim_block):
-                own.error = f"{own.model.anim_block} isn't in {own.source.label}"
+            if own.model.anim_block != stem + ".ani":
+                own.error = f"{name} streams its animations from {own.model.anim_block}, not {stem}.ani"
+            elif not own.source.has(own.model.anim_block):
+                own.error = f"{own.model.anim_block} isn't in {own.path_id}"
             own.files.append(own.model.anim_block)
 
     def plan(self) -> Plan:
@@ -476,6 +508,11 @@ def check_mount(mount: Mount, lists: Lists) -> tuple[list[str], set[str]]:
         problems += winner_problems(mount, planner)
         copied |= set(plan.models)
         report(mount, lists, label, path_ids, plan)
+    # episode two copies nothing: its own content has to be what the merged mount gives every model, on this engine too
+    episode_two = Planner(mount, lists, EPISODE_TWO).plan()
+    problems += [f"{mount.engine}, episode two: {skipped}" for skipped in episode_two.skipped]
+    problems += [f"{mount.engine}, episode two: its own content isn't the merged mount's for {name}" for name in episode_two.models]
+    problems += [f"{mount.engine}, episode two: {lost}" for lost in lost_sequences(mount, EPISODE_TWO, Plan(), models)]
     report(mount, lists, "episode two (the merged mount)", (), Plan())
     return problems, copied
 

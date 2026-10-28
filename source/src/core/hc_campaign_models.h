@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -129,7 +130,11 @@ namespace halfcraft
 
 	inline constexpr char LOST_COAST_MAP[] = "d2_lostcoast";
 
-	/// whose characters a map plays: lost coast's by its map's name, otherwise its campaign's.
+	/// the rules plan_model_set() follows, as a number: a state file written under other rules is stale
+	inline constexpr int CAMPAIGN_MODEL_RULES = 2;
+
+	/// whose characters a map plays: lost coast's by its map's name, otherwise its campaign's (any map that isn't an
+	/// episode's, as for its skill values and titles).
 	inline ModelSet model_set_of(const char* map)
 	{
 		if (map) {
@@ -155,6 +160,8 @@ namespace halfcraft
 		}
 		return ModelSet::kHalfLife2;
 	}
+
+	inline constexpr ModelSet MODEL_SETS[] = { ModelSet::kHalfLife2, ModelSet::kEpisodeOne, ModelSet::kEpisodeTwo, ModelSet::kLostCoast };
 
 	/// for the log: "half-life 2", "episode one", ...
 	inline const char* model_set_name(ModelSet set)
@@ -190,7 +197,7 @@ namespace halfcraft
 
 	inline std::optional<ModelSet> model_set_from_key(const std::string& key)
 	{
-		for (const ModelSet set : { ModelSet::kHalfLife2, ModelSet::kEpisodeOne, ModelSet::kEpisodeTwo, ModelSet::kLostCoast }) {
+		for (const ModelSet set : MODEL_SETS) {
 			if (key == model_set_key(set)) {
 				return set;
 			}
@@ -218,7 +225,6 @@ namespace halfcraft
 	/// what a model's header says that matters here.
 	struct StudioHeader
 	{
-		int                      version = 0;
 		std::uint32_t            checksum = 0;
 		std::vector<std::string> includes;    // "models/....mdl", lower case
 		std::string              anim_block;  // "models/....ani" its animations stream from, lower case; empty: none
@@ -241,6 +247,12 @@ namespace halfcraft
 				static_cast<std::uint32_t>(data[at + 2]) << 16 | static_cast<std::uint32_t>(data[at + 3]) << 24;
 		}
 
+		inline char normal_char(char c)
+		{
+			return c == '\\' ? '/' : c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a')
+														  : c;
+		}
+
 		/// the nul-terminated string at an offset, lower case with forward slashes; nullopt when it runs off the end
 		inline std::optional<std::string> name_at(const std::uint8_t* data, std::size_t size, std::uint64_t at)
 		{
@@ -249,16 +261,10 @@ namespace halfcraft
 			}
 			std::string name;
 			for (std::size_t i = static_cast<std::size_t>(at); i < size; ++i) {
-				char c = static_cast<char>(data[i]);
-				if (!c) {
+				if (!data[i]) {
 					return name;
 				}
-				if (c == '\\') {
-					c = '/';
-				} else if (c >= 'A' && c <= 'Z') {
-					c = static_cast<char>(c - 'A' + 'a');
-				}
-				name += c;
+				name += normal_char(static_cast<char>(data[i]));
 			}
 			return std::nullopt;
 		}
@@ -292,12 +298,41 @@ namespace halfcraft
 			return false;
 		}
 
-		inline std::string hex(std::uint32_t value)
+		inline bool has(const std::vector<const char*>& ids, const char* id)
 		{
-			char text[9];
-			std::snprintf(text, sizeof(text), "%08x", static_cast<unsigned>(value));
+			for (const char* entry : ids) {
+				if (std::strcmp(entry, id) == 0) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		inline std::string joined(const std::vector<std::string>& items, const char* between = ", ")
+		{
+			std::string text;
+			for (const std::string& item : items) {
+				text += (text.empty() ? "" : between) + item;
+			}
 			return text;
 		}
+	}
+
+	/// a model or file name as the lists write it: lower case, forward slashes
+	inline std::string normal_model_name(std::string name)
+	{
+		for (char& c : name) {
+			c = campaign_models_detail::normal_char(c);
+		}
+		return name;
+	}
+
+	/// a checksum as the log and the state file write it
+	inline std::string checksum_text(std::uint32_t value)
+	{
+		char text[9];
+		std::snprintf(text, sizeof(text), "%08x", static_cast<unsigned>(value));
+		return text;
 	}
 
 	/// a .mdl's header, read by its offsets on disk (64-bit engines lay studiohdr_t out differently in memory). nullopt
@@ -309,12 +344,12 @@ namespace halfcraft
 		if (!data || size < d::HEADER_BYTES || std::memcmp(data, "IDST", 4) != 0) {
 			return std::nullopt;
 		}
-		StudioHeader header;
-		header.version = static_cast<int>(*d::le32(data, size, d::VERSION));
-		header.checksum = *d::le32(data, size, d::CHECKSUM);
-		if (header.version < d::MIN_VERSION || header.version > d::MAX_VERSION || *d::le32(data, size, d::LENGTH) != size) {
+		const auto version = static_cast<int>(*d::le32(data, size, d::VERSION));
+		if (version < d::MIN_VERSION || version > d::MAX_VERSION || *d::le32(data, size, d::LENGTH) != size) {
 			return std::nullopt;
 		}
+		StudioHeader header;
+		header.checksum = *d::le32(data, size, d::CHECKSUM);
 		const std::uint32_t includes = *d::le32(data, size, d::INCLUDES);
 		const std::uint32_t include_index = *d::le32(data, size, d::INCLUDE_INDEX);
 		if (includes > d::MAX_INCLUDES || (includes && static_cast<std::uint64_t>(include_index) + 8ull * includes > size)) {
@@ -367,7 +402,7 @@ namespace halfcraft
 	struct PlannedModel
 	{
 		std::string   name;
-		const char*   source = nullptr;
+		std::string   source;  // its path id
 		std::uint32_t checksum = 0;
 	};
 
@@ -376,7 +411,9 @@ namespace halfcraft
 	{
 		std::vector<PlannedModel> models;
 		std::vector<PlannedFile>  files;
-		std::vector<std::string>  skipped;  // "<root>'s closure: <why>", for each closure left out
+		std::vector<std::string>  skipped;  // "<root>'s closure: <why>", for each closure left out, and a set none of whose
+											// characters its sources have
+		int roots = 0;                      // the characters the set's own content has
 
 		std::size_t bytes() const
 		{
@@ -417,17 +454,19 @@ namespace halfcraft
 			model.files.push_back(std::move(file));
 		}
 
-		/// the merged sources ahead of one: the ones whose version of a file the game would find first
-		inline std::vector<const char*> ahead_of(const char* source)
+		/// the merged sources whose version of a file the game would find for a copy that lacks it, where valve's own
+		/// mount of the set wouldn't: the ones ahead of the copy's source, and the ones outside the set's own content
+		inline std::vector<const char*> slip_in_sources(const std::vector<const char*>& set_sources, const char* source)
 		{
-			std::vector<const char*> ahead;
+			std::vector<const char*> found;
+			bool                     ahead = true;
 			for (const char* merged : MERGED_MODEL_SOURCES) {
-				if (std::strcmp(merged, source) == 0) {
-					break;
+				ahead = ahead && std::strcmp(merged, source) != 0;
+				if (ahead || !has(set_sources, merged)) {
+					found.push_back(merged);
 				}
-				ahead.push_back(merged);
 			}
-			return ahead;
+			return found;
 		}
 
 		/// whether the merged mount resolves another version of a .mdl than the set's own source has
@@ -452,15 +491,15 @@ namespace halfcraft
 		}
 
 		/// the companions and the anim block of a model that's copied, all from its .mdl's source
-		inline void add_companions(const ModelFileSource& files, const std::string& name, OwnModel& model)
+		inline void add_companions(const ModelFileSource& files, const std::vector<const char*>& set_sources, const std::string& name, OwnModel& model)
 		{
 			const std::string base = stem(name);
 			for (const ModelCompanion& companion : MODEL_COMPANIONS) {
 				const std::string file = base + companion.extension;
 				if (!files.exists(file, model.source)) {
-					for (const char* ahead : ahead_of(model.source)) {
-						if (files.exists(file, ahead)) {
-							model.error = file + " isn't in " + model.source + " but " + ahead + " has one, which would go with this .mdl";
+					for (const char* other : slip_in_sources(set_sources, model.source)) {
+						if (files.exists(file, other)) {
+							model.error = file + " isn't in " + model.source + " but " + other + " has one, which the game would take with this .mdl";
 							return;
 						}
 					}
@@ -472,11 +511,17 @@ namespace halfcraft
 				}
 				const auto checksum = companion_checksum(companion, model.files.back().data);
 				if (!checksum || *checksum != model.header.checksum) {
-					model.error = file + "'s checksum " + (checksum ? hex(*checksum) : std::string("(none)")) + " isn't the .mdl's " + hex(model.header.checksum);
+					model.error = file + "'s checksum " + (checksum ? checksum_text(*checksum) : std::string("(none)")) + " isn't the .mdl's " +
+						checksum_text(model.header.checksum);
 					return;
 				}
 			}
 			if (!model.header.anim_block.empty()) {
+				// the game folder's leftovers are found by <stem>.ani: a copy streaming from another name would be lost
+				if (model.header.anim_block != base + ".ani") {
+					model.error = name + " streams its animations from " + model.header.anim_block + ", not " + base + ".ani";
+					return;
+				}
 				if (!files.exists(model.header.anim_block, model.source)) {
 					model.error = model.header.anim_block + " isn't in " + model.source;
 					return;
@@ -519,17 +564,28 @@ namespace halfcraft
 				return model;
 			}
 			model.files.push_back(std::move(mdl));
-			add_companions(files, name, model);
+			add_companions(files, sources, name, model);
 			return model;
+		}
+
+		inline bool contains(const std::vector<std::string>& list, const std::string& name)
+		{
+			for (const std::string& entry : list) {
+				if (entry == name) {
+					return true;
+				}
+			}
+			return false;
 		}
 	}
 
 	/// the files that give a set its own characters. each root its own sources have is taken with its closure, every
 	/// member as those sources resolve it; a member is copied when the merged mount's first version of it (by
 	/// MERGED_MODEL_SOURCES) is another one, with its companions and its anim block from the source of its .mdl. a
-	/// closure goes all or nothing: a member that's missing, unreadable, a companion whose checksum isn't the .mdl's or
-	/// that another source would slip in, a copied name off CAMPAIGN_MODELS_SWAPPED, leaves the closure out (skipped
-	/// says why); a model another whole closure has stays.
+	/// root's closure goes all or nothing: a member that's missing, unreadable, a companion whose checksum isn't the
+	/// .mdl's or that the game would take from another pak, an anim block that isn't <stem>.ani, a copied name off
+	/// CAMPAIGN_MODELS_SWAPPED, leaves that closure out (skipped says why). a member another root's whole closure has is
+	/// still copied, so that character plays a mix: skipped names those members.
 	inline ModelSetPlan plan_model_set(ModelSet set, const ModelFileSource& files)
 	{
 		namespace d = campaign_models_detail;
@@ -538,8 +594,9 @@ namespace halfcraft
 		if (sources.empty()) {
 			return plan;
 		}
-		std::map<std::string, d::OwnModel> models;
-		std::set<std::string>              kept;
+		std::map<std::string, d::OwnModel>                            models;
+		std::set<std::string>                                         kept;
+		std::vector<std::pair<std::string, std::vector<std::string>>> failed;  // a root, the members it had
 		for (const char* root : CAMPAIGN_CHARACTERS) {
 			bool own = false;
 			for (const char* source : sources) {
@@ -548,6 +605,7 @@ namespace halfcraft
 			if (!own) {
 				continue;
 			}
+			++plan.roots;
 			std::vector<std::string> closure{ root };
 			std::string              failure;
 			for (std::size_t i = 0; i < closure.size() && failure.empty(); ++i) {
@@ -557,17 +615,14 @@ namespace halfcraft
 				}
 				failure = found->second.error;
 				for (const std::string& include : found->second.header.includes) {
-					bool seen = false;
-					for (const std::string& member : closure) {
-						seen = seen || member == include;
-					}
-					if (!seen) {
+					if (!d::contains(closure, include)) {
 						closure.push_back(include);
 					}
 				}
 			}
 			if (!failure.empty()) {
 				plan.skipped.push_back(std::string(root) + "'s closure: " + failure);
+				failed.emplace_back(root, closure);
 				continue;
 			}
 			kept.insert(closure.begin(), closure.end());
@@ -581,6 +636,21 @@ namespace halfcraft
 			for (PlannedFile& file : model.files) {
 				plan.files.push_back(std::move(file));
 			}
+		}
+		for (std::size_t i = 0; i < failed.size(); ++i) {
+			std::vector<std::string> mixed;
+			for (const std::string& member : failed[i].second) {
+				if (kept.count(member) && models[member].copied) {
+					mixed.push_back(member);
+				}
+			}
+			if (!mixed.empty()) {
+				plan.skipped[i] += "; it still gets " + d::joined(mixed) + " of this set through other characters";
+			}
+		}
+		if (plan.roots == 0) {
+			std::vector<std::string> ids(sources.begin(), sources.end());
+			plan.skipped.push_back("none of the characters is in " + d::joined(ids) + " (gameinfo.txt mounts them there)");
 		}
 		return plan;
 	}
@@ -612,9 +682,42 @@ namespace halfcraft
 		return names;
 	}
 
+	/// the .mdl a file of the game folder's goes with (models/x.ani, models/x.dx90.vtx: models/x.mdl); nullopt for one
+	/// that isn't a model's
+	inline std::optional<std::string> model_of_file(const std::string& file)
+	{
+		namespace d = campaign_models_detail;
+		const std::string name = normal_model_name(file);
+		if (d::ends_with(name, ".mdl")) {
+			return name;
+		}
+		std::vector<const char*> extensions{ ".ani" };
+		for (const ModelCompanion& companion : MODEL_COMPANIONS) {
+			extensions.push_back(companion.extension);
+		}
+		for (const char* extension : extensions) {
+			if (d::ends_with(name, extension)) {
+				return name.substr(0, name.size() - std::strlen(extension)) + ".mdl";
+			}
+		}
+		return std::nullopt;
+	}
+
+	/// the models some files go with, sorted, each once
+	inline std::vector<std::string> models_of_files(const std::vector<std::string>& files)
+	{
+		std::set<std::string> models;
+		for (const std::string& file : files) {
+			if (const auto model = model_of_file(file)) {
+				models.insert(*model);
+			}
+		}
+		return { models.begin(), models.end() };
+	}
+
 	/// what the game folder holds, halfcraft-campaign-models.txt: the set and every file written for it (with its size,
-	/// and its source's, to notice a pak valve updated), and each copied model's checksum. written last, so a folder
-	/// without it may hold anything
+	/// and its source's, to notice a pak valve updated), and each copied model's checksum and source. written last, so a
+	/// folder without it may hold anything
 	struct CampaignModelFile
 	{
 		std::string name;
@@ -625,15 +728,16 @@ namespace halfcraft
 
 	struct CampaignModelState
 	{
-		std::uint32_t                                      list_hash = 0;
-		ModelSet                                           set = ModelSet::kEpisodeTwo;
-		std::vector<CampaignModelFile>                     files;
-		std::vector<std::pair<std::string, std::uint32_t>> models;  // name, checksum
+		std::uint32_t                  list_hash = 0;
+		ModelSet                       set = ModelSet::kEpisodeTwo;
+		std::vector<CampaignModelFile> files;
+		std::vector<PlannedModel>      models;
 	};
 
-	inline constexpr char CAMPAIGN_MODEL_STATE_HEADER[] = "halfcraft campaign models 1";
+	inline constexpr char CAMPAIGN_MODEL_STATE_HEADER[] = "halfcraft campaign models 2";
 
-	/// the lists' fingerprint (fnv-1a over every name and number in them): a state written with other lists is stale
+	/// the fingerprint (fnv-1a) of the lists and the rules a state was written under: every name and number in the
+	/// lists, the sets' sources, lost coast's map and the planner's rules. a state written under others is stale
 	inline std::uint32_t campaign_model_list_hash()
 	{
 		std::uint32_t hash = 2166136261u;
@@ -644,6 +748,8 @@ namespace halfcraft
 			hash = (hash ^ 0xffu) * 16777619u;
 		};
 		add(CAMPAIGN_MODEL_STATE_HEADER);
+		add(std::to_string(CAMPAIGN_MODEL_RULES));
+		add(LOST_COAST_MAP);
 		for (const char* name : CAMPAIGN_CHARACTERS) {
 			add(name);
 		}
@@ -659,19 +765,25 @@ namespace halfcraft
 		for (const char* source : MERGED_MODEL_SOURCES) {
 			add(source);
 		}
+		for (const ModelSet set : MODEL_SETS) {
+			add(model_set_key(set));
+			for (const char* source : model_set_sources(set)) {
+				add(source);
+			}
+		}
 		return hash;
 	}
 
 	inline std::string format_campaign_model_state(const CampaignModelState& state)
 	{
 		std::string text = std::string(CAMPAIGN_MODEL_STATE_HEADER) + "\n";
-		text += "list " + campaign_models_detail::hex(state.list_hash) + "\n";
+		text += "list " + checksum_text(state.list_hash) + "\n";
 		text += std::string("set ") + model_set_key(state.set) + "\n";
 		for (const CampaignModelFile& file : state.files) {
 			text += "file " + file.name + " " + std::to_string(file.size) + " " + file.source + " " + std::to_string(file.source_size) + "\n";
 		}
-		for (const auto& [name, checksum] : state.models) {
-			text += "model " + name + " " + campaign_models_detail::hex(checksum) + "\n";
+		for (const PlannedModel& model : state.models) {
+			text += "model " + model.name + " " + checksum_text(model.checksum) + " " + model.source + "\n";
 		}
 		return text;
 	}
@@ -715,11 +827,16 @@ namespace halfcraft
 			return value;
 		}
 
+		inline bool checksum_word(const std::string& word)
+		{
+			return word.size() == 8 && number(word, 16).has_value();
+		}
+
 		/// a line of the state file, read into it; false when it isn't one
 		inline bool read_state_line(const std::vector<std::string>& line, CampaignModelState& state, bool& has_list, bool& has_set)
 		{
 			const std::string& kind = line[0];
-			if (kind == "list" && line.size() == 2 && line[1].size() == 8 && number(line[1], 16)) {
+			if (kind == "list" && line.size() == 2 && checksum_word(line[1])) {
 				state.list_hash = static_cast<std::uint32_t>(*number(line[1], 16));
 				has_list = true;
 			} else if (kind == "set" && line.size() == 2 && model_set_from_key(line[1])) {
@@ -727,8 +844,8 @@ namespace halfcraft
 				has_set = true;
 			} else if (kind == "file" && line.size() == 5 && number(line[2], 10).value_or(0) > 0 && number(line[4], 10).value_or(0) > 0) {
 				state.files.push_back({ line[1], static_cast<long>(*number(line[2], 10)), line[3], static_cast<long>(*number(line[4], 10)) });
-			} else if (kind == "model" && line.size() == 3 && line[2].size() == 8 && number(line[2], 16)) {
-				state.models.emplace_back(line[1], static_cast<std::uint32_t>(*number(line[2], 16)));
+			} else if (kind == "model" && line.size() == 4 && checksum_word(line[2])) {
+				state.models.push_back({ line[1], line[3], static_cast<std::uint32_t>(*number(line[2], 16)) });
 			} else {
 				return false;
 			}
@@ -768,5 +885,75 @@ namespace halfcraft
 			return std::nullopt;
 		}
 		return state;
+	}
+
+	/// why a state's copies may no longer be what the set's sources give (a pak valve updated), checked once a run:
+	/// a file's source no longer as big, a copied model's source version or the merged mount's no longer what made it
+	/// a copy. nullopt: they still are
+	inline std::optional<std::string> stale_campaign_models(const CampaignModelState& state, const ModelFileSource& files)
+	{
+		namespace d = campaign_models_detail;
+		for (const CampaignModelFile& file : state.files) {
+			if (files.size(file.name, file.source.c_str()) != file.source_size) {
+				return file.name + " under " + file.source + " isn't the size it was";
+			}
+		}
+		for (const PlannedModel& model : state.models) {
+			std::vector<std::uint8_t> head;
+			const auto                own = files.read(model.name, model.source.c_str(), head, d::CHECKSUM + 4) ? d::le32(head.data(), head.size(), d::CHECKSUM) : std::nullopt;
+			if (own != model.checksum) {
+				return model.name + " under " + model.source + " isn't the version copied";
+			}
+			std::string error;
+			if (!d::merged_differs(files, model.name, model.source.c_str(), model.checksum, error) || !error.empty()) {
+				return model.name + " is the merged mount's version now";
+			}
+		}
+		return std::nullopt;
+	}
+
+	/// how a swap changes the game folder: the plan's files it already holds as written (same name, source and size,
+	/// by a state written under today's lists), which stay; the files there that go (every name a plan may write, and
+	/// the state's, but those that stay); the plan's files that come
+	struct CampaignModelSwap
+	{
+		std::vector<std::string> keep;
+		std::vector<std::string> remove;
+		std::vector<std::size_t> write;  // indices into the plan's files
+	};
+
+	/// @param old - the state the folder had, if any; its files stay only when trusted (its lists are today's)
+	/// @param folder_size - a file's size in the game folder, -1 when it isn't there
+	inline CampaignModelSwap plan_campaign_model_swap(const std::optional<CampaignModelState>& old, bool trusted, const ModelSetPlan& plan,
+		const std::function<long(const std::string&)>& folder_size)
+	{
+		CampaignModelSwap swap;
+		for (std::size_t i = 0; i < plan.files.size(); ++i) {
+			const PlannedFile& file = plan.files[i];
+			bool               stays = false;
+			if (old && trusted) {
+				for (const CampaignModelFile& had : old->files) {
+					stays = stays || (had.name == file.name && had.source == file.source && had.size == static_cast<long>(file.data.size()));
+				}
+			}
+			if (stays && folder_size(file.name) == static_cast<long>(file.data.size())) {
+				swap.keep.push_back(file.name);
+			} else {
+				swap.write.push_back(i);
+			}
+		}
+		std::set<std::string>    seen(swap.keep.begin(), swap.keep.end());
+		std::vector<std::string> candidates = campaign_model_files();
+		if (old) {
+			for (const CampaignModelFile& had : old->files) {
+				candidates.push_back(had.name);
+			}
+		}
+		for (const std::string& name : candidates) {
+			if (seen.insert(name).second && folder_size(name) >= 0) {
+				swap.remove.push_back(name);
+			}
+		}
+		return swap;
 	}
 }
