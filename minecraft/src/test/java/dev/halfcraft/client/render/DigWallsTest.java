@@ -470,6 +470,37 @@ class DigWallsTest {
 	}
 
 	@Test
+	void shouldNotCutOpenAThinBrushWhoseFaceIsAHairOffTheAxis() {
+		// the same, its underside rising 0.0005 a block along z through 2.25 at z 3.5: within the tolerance of the
+		// sub-voxels' boundary over the face, further from it toward its ends. under 2.25 (z 3-3.5) it reaches into the row
+		// under it, which is rock there
+		World w = eastRock(from(2, -1L));
+		w.rock.get(new Pos(2, 2, 3))[1] = 0x00000000FFFFFFFFL;
+		ceiling(w, BRUSH, 2.3);
+		double rise = 0.0005;
+		w.face(BRUSH, p(0, 2.25 - 3.5 * rise, 0), p(5, 2.25 - 3.5 * rise, 0), p(5, 2.25 + 3.5 * rise, 7), p(0, 2.25 + 3.5 * rise, 7)); // its underside
+		w.face(BRUSH, p(0, 2.3, 0), p(0, 2.3, 7), p(5, 2.3, 7), p(5, 2.3, 0)); // its top, against the ceiling
+		List<Quad> quads = walls(w);
+		// rows 2-7 whole but for the sliver its own underside cuts where it rises into row 2 (z 3.5-4, under 2.5e-4), and
+		// as much of row 1 as it reaches into (z 3-3.5): 0.75 in all
+		assertEquals(0.75, area(quads), 1e-5);
+	}
+
+	@Test
+	void shouldNotCutOpenAThinBrushWhoseFaceOnTheCellsEdgeFloatsPutOut() {
+		// a ceiling's underside at 2.05 over a brush whose underside is the cells' boundary at 2, rounded a float under
+		// it, and the room under the neighbour
+		World w = eastRock(FULL);
+		ceiling(w, BRUSH, 2.05);
+		double under = Math.nextDown(2.0F);
+		w.face(BRUSH, p(0, under, 0), p(5, under, 0), p(5, under, 7), p(0, under, 7)); // its underside
+		w.face(BRUSH, p(0, 2.05, 0), p(0, 2.05, 7), p(5, 2.05, 7), p(5, 2.05, 0)); // its top, against the ceiling
+		w.empty(new Pos(2, 1, 3));
+		assertEquals(1.0, area(walls(w)), 1e-6);
+		assertEquals(0, w.count.cut());
+	}
+
+	@Test
 	void shouldLeaveWholeASubVoxelAPropReachesInto() {
 		// a prop's face (in both windings, as they come) hanging under the ceiling's underside at z 3.45, from 2.26 up
 		World w = eastRock(from(2, -1L));

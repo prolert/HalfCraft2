@@ -374,6 +374,9 @@ final class DigWalls {
 					double w0 = a + STEP[this.d][k] * INTO / 2, w1 = a + STEP[this.d][k] * 2 * INTO;
 					a = Math.min(w0, w1);
 					b = Math.max(w0, w1);
+				} else { // along it: the face's square and the tolerance, for a face on its edge that floats put a hair out
+					a -= this.same;
+					b += this.same;
 				}
 				lo[k] = a;
 				hi[k] = b;
@@ -591,21 +594,27 @@ final class DigWalls {
 		 * winding faces out of the sub-voxel; any winding for a face that isn't diggable), and past the rim there.
 		 */
 		private boolean alongSide(Rim rim, Crossing g, double u0, double v0, double u1, double v1) {
-			double same = this.same;
 			boolean anyWinding = !g.diggable();
-			if (Math.abs(g.u0() - u0) <= same && Math.abs(g.u1() - u0) <= same && (anyWinding || g.au() < -0.5)) {
-				return this.within(g, u0 - same, v0, u0 + same, v1) && this.past(rim, g);
+			return ((anyWinding || g.au() < -0.5) && this.along(g, true, u0, v0, v1) && this.past(rim, g))
+				|| ((anyWinding || g.au() > 0.5) && this.along(g, true, u1, v0, v1) && this.past(rim, g))
+				|| ((anyWinding || g.av() < -0.5) && this.along(g, false, v0, u0, u1) && this.past(rim, g))
+				|| ((anyWinding || g.av() > 0.5) && this.along(g, false, v1, u0, u1) && this.past(rim, g));
+		}
+
+		/**
+		 * Whether the crossing's part across the span [from, to] of a side of the sub-voxel (in v for a side at u = at,
+		 * {@code acrossU}; in u for one at v = at) lies along that side, within the tolerance from end to end: only that
+		 * part, as a face a hair off the axis strays from the side further along. That part is then part[0] to part[1].
+		 */
+		private boolean along(Crossing g, boolean acrossU, double at, double from, double to) {
+			double far = Double.POSITIVE_INFINITY;
+			if (!(acrossU ? this.within(g, -far, from, far, to) : this.within(g, from, -far, to, far))) {
+				return false;
 			}
-			if (Math.abs(g.u0() - u1) <= same && Math.abs(g.u1() - u1) <= same && (anyWinding || g.au() > 0.5)) {
-				return this.within(g, u1 - same, v0, u1 + same, v1) && this.past(rim, g);
-			}
-			if (Math.abs(g.v0() - v0) <= same && Math.abs(g.v1() - v0) <= same && (anyWinding || g.av() < -0.5)) {
-				return this.within(g, u0, v0 - same, u1, v0 + same) && this.past(rim, g);
-			}
-			if (Math.abs(g.v0() - v1) <= same && Math.abs(g.v1() - v1) <= same && (anyWinding || g.av() > 0.5)) {
-				return this.within(g, u0, v1 - same, u1, v1 + same) && this.past(rim, g);
-			}
-			return false;
+			double du = g.u1() - g.u0(), dv = g.v1() - g.v0();
+			double a = acrossU ? g.u0() + du * this.part[0] : g.v0() + dv * this.part[0];
+			double b = acrossU ? g.u0() + du * this.part[1] : g.v0() + dv * this.part[1];
+			return Math.abs(a - at) <= this.same && Math.abs(b - at) <= this.same;
 		}
 
 		/** Whether the crossing has a part of some length in the box [u0, u1] x [v0, v1]: from part[0] to part[1] of it. */
