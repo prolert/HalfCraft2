@@ -181,7 +181,7 @@ def build_launcher(vs: Path) -> Path:
     numbers = ",".join(map(str, version.numbers(text)))
     (out / "version.h").write_bytes(f'#define HC_VERSION {numbers}\r\n#define HC_VERSION_TEXT "{text}"\r\n'.encode("ascii"))
     cl = (
-        f'cl /nologo /O2 /MT /W4 /WX /EHsc /std:c++17 /DUNICODE /D_UNICODE /I "{REPO}\\source\\src" /I "{REPO}\\protocol" /Fo"{out}\\\\" '
+        f'cl /nologo /O2 /MT /W4 /WX /EHsc /std:c++17 /utf-8 /DUNICODE /D_UNICODE /I "{REPO}\\source\\src" /I "{REPO}\\protocol" /Fo"{out}\\\\" '
         f'/Fe"{out}\\HalfCraft.exe" halfcraft_launcher.cpp "{REPO}\\source\\src\\core\\hc_prism.cpp" "{out}\\halfcraft.res" '
         "/link /SUBSYSTEM:WINDOWS user32.lib shell32.lib shlwapi.lib advapi32.lib comctl32.lib || exit /b 1"
     )

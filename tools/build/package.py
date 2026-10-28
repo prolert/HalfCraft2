@@ -5,9 +5,11 @@ HalfCraft-<version>-pdb.zip   both engines' client.dll and server.dll debug symb
 
 python tools/build/package.py [--no-build]
 
-the zip's HalfCraft folder: HalfCraft.exe, game-hl2\\ and game-hl2dm\\ (the game folders of the two engines,
+the zip's HalfCraft folder: HalfCraft.exe, "HalfCraft EN.cmd" and "HalfCraft RU.cmd" (HalfCraft.exe in english or
+russian, from package\\), game-hl2\\ and game-hl2dm\\ (the game folders of the two engines,
 tools/halfcraft/game_folder.py), minecraft\\ (portable Prism Launcher with the HalfCraft instance and its mods,
-from package\\minecraft), README.txt, LICENSE.txt, THIRD-PARTY-NOTICES.md.
+from package\\minecraft), README.txt and README_RU.txt (english, russian), LICENSE.txt, THIRD-PARTY-NOTICES.md.
+its names are ascii, which every unzip reads (windows 11's own reads utf-8 names, older ones may not).
 
 building needs what tools/build/build_hl2.py needs plus JDK 25 (tools/halfcraft/gradle.py finds it). Prism Launcher
 and Fabric API are downloaded once into .cache\\package and checked against the hashes pinned below.
@@ -35,6 +37,8 @@ FABRIC_API_URL = "https://cdn.modrinth.com/data/P7dR8mSH/versions/bNnaTiuM/fabri
 FABRIC_API_SHA512 = "ed6b2586d6fde11fde8472f5a527c51e99b67026e46f94d4bfd85e7e28ce5ee299173ee16ad576ceb51f39f98d30a811086a6deb1a86a524859cc16e12da109d"
 CACHE = REPO / ".cache/package"
 DIST = REPO / "dist"
+# the language launchers at the zip's top, from package\
+LAUNCHERS = ["HalfCraft EN.cmd", "HalfCraft RU.cmd"]
 
 
 def gradle_property(name: str) -> str:
@@ -58,11 +62,23 @@ def folder_entries(folder: Path, prefix: str) -> dict[str, Path]:
 
 
 def copy_text(source: Path, target: Path, values: dict[str, str] | None = None) -> None:
-    """text the player opens in notepad: crlf, placeholders ({KEY}) filled in."""
+    """text the player opens in notepad: crlf, placeholders ({KEY}) filled in, utf-8 with a bom (so no viewer
+    reads the russian in another code page).
+    """
     text = source.read_text(encoding="utf-8-sig")
     for key, value in (values or {}).items():
         text = text.replace(f"{{{key}}}", value)
-    target.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+    target.write_bytes(text.replace("\n", "\r\n").encode("utf-8-sig"))
+
+
+def copy_script(source: Path, target: Path) -> None:
+    """a .cmd the player double-clicks: crlf and ascii only (cmd misreads a batch file's other bytes under some
+    code pages, 65001 among them).
+    """
+    data = source.read_bytes()
+    if not data.isascii():
+        raise ToolError(f"{source} has non-ascii bytes: cmd can misread it; say it in HalfCraft.exe's texts instead")
+    target.write_bytes(data.decode("ascii").replace("\r\n", "\n").replace("\n", "\r\n").encode("ascii"))
 
 
 def main() -> None:
@@ -121,7 +137,10 @@ def main() -> None:
     shutil.copy2(fabric_api, mods / "fabric-api.jar")
 
     shutil.copy2(launcher, stage)
+    for name in LAUNCHERS:
+        copy_script(REPO / "package" / name, stage / name)
     copy_text(REPO / "package/README.txt", stage / "README.txt", {"VERSION": text})
+    copy_text(REPO / "package/README_RU.txt", stage / "README_RU.txt", {"VERSION": text})
     copy_text(REPO / "LICENSE", stage / "LICENSE.txt")
     copy_text(REPO / "THIRD-PARTY-NOTICES.md", stage / "THIRD-PARTY-NOTICES.md")
 

@@ -123,7 +123,7 @@ namespace halfcraft::prism
 			started = ::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &startup, &process);
 		}
 		if (!started) {
-			error = L"couldn't start " + exe.wstring() + L": " + error_text(::GetLastError());
+			error = exe.wstring() + L": " + error_text(::GetLastError());
 			return false;
 		}
 		::CloseHandle(process.hThread);

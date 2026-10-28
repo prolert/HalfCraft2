@@ -54,7 +54,7 @@ PROJECTS = [
 ]
 # built by plain cl lines (tools/halfcraft/build.py, tools/debug/collision_check.py), 64-bit
 PLAIN = {
-    "source/launcher/": ["-DUNICODE", "-D_UNICODE", f"-I{REPO / 'source/src'}", f"-I{REPO / 'protocol'}"],
+    "source/launcher/": ["/utf-8", "-DUNICODE", "-D_UNICODE", f"-I{REPO / 'source/src'}", f"-I{REPO / 'protocol'}"],
     "tools/debug/": [f"-I{REPO / 'source/src'}"],
 }
 # clang-tidy's own lines about the run, not about a finding

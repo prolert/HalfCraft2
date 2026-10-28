@@ -1,6 +1,8 @@
 HalfCraft {VERSION}
 ==================
 
+По-русски: README_RU.txt
+
 Half-Life 2, played with Minecraft. Real Minecraft runs hidden and does your physics, inventory,
 blocks and combat; Half-Life 2 runs its world, NPCs and story around you. Build on its maps, fight
 the Combine with a diamond sword, light City 17 with torches. Episode One, Episode Two and Lost
@@ -12,8 +14,9 @@ YOU NEED
 - Windows 10 or 11, 64-bit
 - Steam, with Half-Life 2 installed, and its two episodes for their chapters (they come with
   Half-Life 2; HalfCraft.exe offers to install them if Steam hasn't)
-- optional: Half-Life 2: Deathmatch. HalfCraft can run on its engine too, which is 64-bit and can
-  use more memory than Half-Life 2's own 32-bit one
+- optional: Half-Life 2: Deathmatch. HalfCraft can run on its engine too, which is 64-bit (it can
+  use more memory than Half-Life 2's own 32-bit one) and the only one where you can dig through
+  Half-Life's walls
 - a Microsoft account that owns Minecraft: Java Edition
 - about 1 GB of free space for Minecraft and Java, which download on the first start
 
@@ -21,14 +24,17 @@ YOU NEED
 PLAY
 
 1. Unpack the zip anywhere, e.g. C:\Games\HalfCraft. A path with only English letters is safest.
-2. Start HalfCraft.exe. If you have Half-Life 2: Deathmatch too, it asks which engine to run and
-   can remember your choice. Hold Shift while starting HalfCraft.exe to choose again.
+2. Start HalfCraft.exe. It speaks Windows' language (Russian on a Russian Windows, English
+   otherwise); HalfCraft EN.cmd starts it in English, HalfCraft RU.cmd in Russian. Windows may warn
+   about an unknown publisher: click More info, then Run anyway (or just Run).
+   If you have Half-Life 2: Deathmatch too, HalfCraft asks which engine to run and can remember
+   your choice. Hold Shift while starting it to choose again.
 3. The first time, Prism Launcher opens: sign in with your Microsoft account. Half-Life 2 starts
    once you're signed in. Minecraft downloads (a few minutes the first time) and joins by itself;
    a line at the top of the screen says how far along it is.
 4. Start a new game, or load a save.
 
-Arguments for Half-Life 2 go after HalfCraft.exe, e.g. a shortcut to
+Arguments for Half-Life 2 go after HalfCraft.exe (or a .cmd), e.g. a shortcut to
    HalfCraft.exe -windowed -w 1920 -h 1080
 
 

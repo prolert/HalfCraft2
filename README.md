@@ -49,12 +49,13 @@ source/          the Source mod (C++)
   src/shared/      the hook entry points, the puppet movement (CGameMovement::HalfCraftMove), the client/server bridge
   sdk/             halfcraft-<engine>.patch: the hooks into Valve's game code, one per SDK tree
   mod/             files laid over the game folders: common/ (cfg), hl2/ and hl2dm/ (gameinfo.txt)
-  launcher/        HalfCraft.exe: a release's one click (finds Steam's games, starts Minecraft, then the mod)
+  launcher/        HalfCraft.exe: a release's one click (finds Steam's games, starts Minecraft, then the mod), in English or Russian
   halfcraft_*.vpc  pulled into Valve's client/server projects
 protocol/        schema/: the shared memory layout, a TOML file per region, the one source of truth for both
                  sides; halfcraft_protocol.h, written from it (make proto) like the mod's Proto.java (offsets)
                  and ProtoStructs.java (the structs it reads and writes whole)
-package/         what a release carries besides code: the Prism instance template, the players' README
+package/         what a release carries besides code: the Prism instance template, the players' READMEs
+                 (English, Russian) and the .cmd files that start HalfCraft.exe in either language
 tools/           the Python tools: halfcraft/ (what they share), build/ (setup, build, packaging),
                  game/ (run, test sessions, console commands, logs), lint/, debug/ (link and crash-dump
                  helpers), assets/
@@ -118,14 +119,20 @@ A release is one command:
 make package                 # builds both halves -> dist/HalfCraft-<version>.zip (+ -pdb.zip)
 ```
 
-The zip's `HalfCraft` folder holds `HalfCraft.exe`, the two game folders (`game-hl2/`,
-`game-hl2dm/`) and a portable Prism Launcher with the HalfCraft instance (`minecraft/`);
-`package/README.txt` is what players read. `HalfCraft.exe` checks Steam has Half-Life 2, asks which
-engine to run when Half-Life 2: Deathmatch is installed too (and remembers it; Shift asks again),
-starts Minecraft through Prism (the first time it waits for the Microsoft sign-in), then the
-engine on its game folder. `client.dll` starts
-Minecraft too when nothing else did, and again if it quits on its own, and says on screen what
-it's doing until it connects. Prism Launcher and Fabric API downloads are pinned by hash.
+The zip's `HalfCraft` folder holds `HalfCraft.exe`, `HalfCraft EN.cmd` and `HalfCraft RU.cmd`, the two
+game folders (`game-hl2/`, `game-hl2dm/`) and a portable Prism Launcher with the HalfCraft instance
+(`minecraft/`); `package/README.txt` and `package/README_RU.txt` are what players read, in English and
+Russian. `HalfCraft.exe` checks Steam has Half-Life 2, asks which engine to run when Half-Life 2:
+Deathmatch is installed too (and remembers it; Shift asks again), starts Minecraft through Prism (the
+first time it waits for the Microsoft sign-in), then the engine on its game folder. It speaks English
+or Russian (`source/launcher/halfcraft_texts.h`): `HALFCRAFT_LANG=en` or `ru` says which, and the two
+`.cmd` files set it and pass their arguments on; without it, Windows' display language decides (Russian
+for Russian, English for the rest). `HalfCraft.exe --strings <file>` writes every text it can show, in
+its language, into a file and starts nothing. The `.cmd` files stay ASCII, as cmd misreads a batch file's
+other bytes under code page 65001 (`tools/build/package.py` refuses them otherwise), and so do the zip's
+names. `client.dll` starts Minecraft too when nothing else did, and again if it quits on its own, and
+says on screen (in English) what it's doing until it connects. Prism Launcher and Fabric API downloads
+are pinned by hash.
 
 Versions come from git tags: a commit tagged `vX.Y.Z` is release X.Y.Z, and the N commits after it are
 `X.(Y+1).0-dev.N+<commit>` (`tools/build/version.py`; the mod, `HalfCraft.exe` and the zip all carry it). CI

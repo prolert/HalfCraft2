@@ -33,7 +33,7 @@ namespace halfcraft::prism
 
 	/// starts the bundle's "HalfCraft" instance through prism, which signs in and downloads minecraft
 	/// and java itself the first time. that first start also puts prism's default settings in place.
-	/// @param error - why it couldn't start, when it couldn't
+	/// @param error - prism's exe and why it couldn't start it, when it couldn't (the callers say what failed)
 	/// @return false when prism couldn't be started
 	bool start(const std::filesystem::path& bundle, std::wstring& error);
 }

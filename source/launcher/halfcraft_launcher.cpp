@@ -8,6 +8,12 @@
 // with both games installed it asks which engine to run and keeps the answer in HalfCraft.ini beside
 // it. holding shift while starting it asks again.
 //
+// it speaks english or russian (halfcraft_texts.h): HALFCRAFT_LANG=en or ru says which (the release's
+// "HalfCraft EN.cmd" and "HalfCraft RU.cmd" set it), else windows' display language does (russian for
+// russian, english for the rest). one argument is its own, not the engine's:
+//
+//   HalfCraft.exe --strings <file>    every text it can show, in its language, into <file> (utf-8); starts nothing
+//
 // it expects the release layout (core/hc_prism.h): game-hl2/, game-hl2dm/ and minecraft/ next to it.
 
 #include <algorithm>
@@ -15,6 +21,7 @@
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,16 +35,20 @@
 #include <tlhelp32.h>
 
 #include "core/hc_prism.h"
+#include "halfcraft_texts.h"
 
 namespace
 {
 	namespace fs = std::filesystem;
+	namespace text = halfcraft::launcher::text;
+	using halfcraft::launcher::Text;
 	using namespace std::chrono_literals;
 
 	constexpr wchar_t TITLE[] = L"HalfCraft";
 	constexpr wchar_t SETTINGS_FILE[] = L"HalfCraft.ini";
 	constexpr wchar_t SETTINGS_SECTION[] = L"launcher";
 	constexpr wchar_t SETTINGS_ENGINE[] = L"engine";
+	constexpr wchar_t LANGUAGE_VARIABLE[] = L"HALFCRAFT_LANG";
 	constexpr wchar_t STEAM_KEY[] = L"Software\\Valve\\Steam";
 	constexpr wchar_t STEAM_PROCESS_KEY[] = L"Software\\Valve\\Steam\\ActiveProcess";
 	constexpr auto    STEAM_SIGN_IN_WAIT = 3min;
@@ -60,14 +71,47 @@ namespace
 		const wchar_t* id;      // its name in HalfCraft.ini and in its mod folder's
 		SteamApp       app;     // the game it comes with
 		const wchar_t* exe;     // in that game's folder
-		const wchar_t* choice;  // what the player picks it by
+		Text           choice;  // what the player picks it by
 	};
 	// half-life 2 is the one game halfcraft always needs (its content), so its engine is always there.
-	// deathmatch's is the 64-bit one: more memory, for players who have it
+	// deathmatch's is the 64-bit one: more memory, and the shader dll that digs half-life's walls
 	constexpr Engine ENGINES[]{
-		{ L"hl2", HALF_LIFE_2, L"hl2.exe", L"Half-Life 2 (32-bit engine)" },
-		{ L"hl2dm", DEATHMATCH, L"hl2mp_win64.exe", L"Half-Life 2: Deathmatch engine (64-bit, more memory)" },
+		{ L"hl2", HALF_LIFE_2, L"hl2.exe", text::HL2_CHOICE },
+		{ L"hl2dm", DEATHMATCH, L"hl2mp_win64.exe", text::HL2DM_CHOICE },
 	};
+
+	bool russian = false;  // the player's language (speaks_russian), set before anything is said
+
+	/// HALFCRAFT_LANG's ru or en, else windows' display language: russian for russian, english for the rest.
+	bool speaks_russian()
+	{
+		wchar_t     chosen[8]{};
+		const DWORD length = ::GetEnvironmentVariableW(LANGUAGE_VARIABLE, chosen, static_cast<DWORD>(std::size(chosen)));
+		if (length > 0 && length < std::size(chosen)) {
+			if (_wcsicmp(chosen, L"ru") == 0) {
+				return true;
+			}
+			if (_wcsicmp(chosen, L"en") == 0) {
+				return false;
+			}
+		}
+		return PRIMARYLANGID(::GetUserDefaultUILanguage()) == LANG_RUSSIAN;
+	}
+
+	/// a text in the player's language, its {0}, {1}, ... filled in with values (not themselves searched for more).
+	std::wstring say(const Text& what, std::initializer_list<std::wstring> values = {})
+	{
+		std::wstring said;
+		for (const wchar_t* at = russian ? what.russian : what.english; *at; ++at) {
+			if (at[0] == L'{' && at[1] >= L'0' && at[1] <= L'9' && at[2] == L'}' && static_cast<std::size_t>(at[1] - L'0') < values.size()) {
+				said += values.begin()[at[1] - L'0'];
+				at += 2;
+			} else {
+				said += *at;
+			}
+		}
+		return said;
+	}
 
 	void tell(const std::wstring& text, UINT icon = MB_ICONINFORMATION)
 	{
@@ -83,6 +127,17 @@ namespace
 	{
 		tell(text, MB_ICONERROR);
 		return 1;
+	}
+
+	std::string narrow(const std::wstring& wide)
+	{
+		if (wide.empty()) {
+			return {};
+		}
+		const int   length = ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+		std::string utf8(static_cast<std::size_t>(length), '\0');
+		::WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), utf8.data(), length, nullptr, nullptr);
+		return utf8;
 	}
 
 	std::wstring widen(const std::string& utf8)
@@ -205,13 +260,13 @@ namespace
 		}
 		const std::wstring steam_exe = registry_string(STEAM_KEY, L"SteamExe");
 		if (steam_exe.empty() || reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", steam_exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32) {
-			fail(L"Couldn't start Steam. Start it, sign in, then start HalfCraft again.");
+			fail(say(text::STEAM_WONT_START));
 			return false;
 		}
 		const auto give_up = std::chrono::steady_clock::now() + STEAM_SIGN_IN_WAIT;
 		while (!steam_signed_in()) {
 			if (std::chrono::steady_clock::now() > give_up) {
-				fail(L"Steam isn't signed in. Sign in, then start HalfCraft again.");
+				fail(say(text::STEAM_SIGNED_OUT));
 				return false;
 			}
 			std::this_thread::sleep_for(500ms);
@@ -224,7 +279,7 @@ namespace
 	{
 		const auto bundle = halfcraft::prism::find_bundle(game);
 		if (bundle.empty()) {
-			fail(L"The minecraft folder next to HalfCraft.exe is missing. Unpack the whole HalfCraft zip again.");
+			fail(say(text::MISSING_FOLDER, { L"minecraft" }));
 			return false;
 		}
 		// one running now is most likely the last game's on its way out: wait for it, then start a new one
@@ -237,20 +292,18 @@ namespace
 		}
 		if (!halfcraft::prism::launcher_running(bundle)) {
 			if (!halfcraft::prism::signed_in(bundle)) {
-				tell(L"First start: Prism Launcher opens and asks you to sign in with the Microsoft account that owns Minecraft: Java Edition. "
-					 L"Then it downloads Minecraft and Java by itself.\n\n"
-					 L"Half-Life 2 starts as soon as you're signed in. Minecraft joins it once it's ready (the first time takes a few minutes).");
+				tell(say(text::FIRST_START));
 			}
 			std::wstring error;
 			if (!halfcraft::prism::start(bundle, error)) {
-				fail(L"Couldn't start Minecraft.\n\n" + error);
+				fail(say(text::MINECRAFT_WONT_START, { error }));
 				return false;
 			}
 		}
 		// prism quits if the player closes it without signing in (or plays its demo, which is fine too)
 		while (!halfcraft::prism::signed_in(bundle) && !halfcraft::prism::minecraft_running()) {
 			if (!halfcraft::prism::launcher_running(bundle) && !halfcraft::prism::minecraft_running()) {
-				tell(L"HalfCraft needs Minecraft, and Minecraft needs an account. Start HalfCraft again to sign in.", MB_ICONWARNING);
+				tell(say(text::NO_ACCOUNT), MB_ICONWARNING);
 				return false;
 			}
 			std::this_thread::sleep_for(500ms);
@@ -313,24 +366,33 @@ namespace
 	{
 		constexpr int FIRST_BUTTON = 100;  // clear of the common buttons' ids (IDCANCEL, ...)
 
+		// the dialog points into these
+		std::vector<std::wstring> choices;
+		choices.reserve(engines.size());
+		for (const Engine* engine : engines) {
+			choices.push_back(say(engine->choice));
+		}
+		const std::wstring question = say(text::WHICH_ENGINE);
+		const std::wstring saves = say(text::ENGINE_SAVES);
+		const std::wstring keep = say(text::REMEMBER_ENGINE);
+
 		TASKDIALOGCONFIG               config{ sizeof(config) };
 		std::vector<TASKDIALOG_BUTTON> buttons;
-		for (const Engine* engine : engines) {
-			const int id = FIRST_BUTTON + static_cast<int>(buttons.size());
-			buttons.push_back({ id, engine->choice });
-			if (engine == remembered) {
+		for (std::size_t i = 0; i < engines.size(); ++i) {
+			const int id = FIRST_BUTTON + static_cast<int>(i);
+			buttons.push_back({ id, choices[i].c_str() });
+			if (engines[i] == remembered) {
 				config.nDefaultButton = id;
 			}
 		}
 		config.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_VERIFICATION_FLAG_CHECKED;
 		config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
 		config.pszWindowTitle = TITLE;
-		config.pszMainInstruction = L"Which engine should run HalfCraft?";
-		config.pszContent = L"Both play the same HalfCraft. Half-Life 2: Deathmatch's engine is 64-bit, so it can use more memory. "
-							L"Each engine keeps its own saves.";
+		config.pszMainInstruction = question.c_str();
+		config.pszContent = saves.c_str();
 		config.cButtons = static_cast<UINT>(buttons.size());
 		config.pButtons = buttons.data();
-		config.pszVerificationText = L"Remember my choice (hold Shift while starting HalfCraft to choose again)";
+		config.pszVerificationText = keep.c_str();
 
 		int           button = 0;
 		BOOL          checked = FALSE;
@@ -338,7 +400,7 @@ namespace
 		if (FAILED(result)) {
 			wchar_t code[16];
 			std::swprintf(code, std::size(code), L"0x%08lX", static_cast<unsigned long>(result));
-			fail(L"Couldn't ask which engine to run (error " + std::wstring(code) + L").");
+			fail(say(text::ASK_ENGINE_FAILED, { code }));
 			return nullptr;
 		}
 		remember = checked != FALSE;
@@ -370,8 +432,7 @@ namespace
 		// a choice not to remember drops the old one too, so the next start asks again
 		if (!::WritePrivateProfileStringW(SETTINGS_SECTION, SETTINGS_ENGINE, remember ? chosen->id : nullptr, settings.c_str())) {
 			const DWORD error = ::GetLastError();
-			tell(L"Couldn't save your choice in " + settings.wstring() + L" (error " + std::to_wstring(error) + L"), so HalfCraft asks again next time.",
-				MB_ICONWARNING);
+			tell(say(text::ENGINE_NOT_KEPT, { settings.wstring(), std::to_wstring(error) }), MB_ICONWARNING);
 		}
 		return chosen;
 	}
@@ -391,8 +452,7 @@ namespace
 		if (missing.empty() || ::GetPrivateProfileIntW(SETTINGS_SECTION, SETTINGS_EPISODES_DECLINED, 0, settings.c_str()) != 0) {
 			return;
 		}
-		if (ask(L"Steam hasn't installed:" + names + L"\n\nThey come with Half-Life 2. Their chapters won't load without them; "
-													 L"Half-Life 2's will.\n\nOpen Steam to install them?")) {
+		if (ask(say(text::MISSING_EPISODES, { names }))) {
 			for (const int id : missing) {
 				::ShellExecuteW(nullptr, L"open", (L"steam://install/" + std::to_wstring(id)).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			}
@@ -408,21 +468,19 @@ namespace
 
 		const fs::path here = exe_dir();
 		if (std::none_of(std::begin(ENGINES), std::end(ENGINES), [&](const Engine& engine) { return is_game_dir(game_dir(here, engine)); })) {
-			return fail(L"HalfCraft.exe has to stay in the HalfCraft folder, next to its game-hl2, game-hl2dm and minecraft folders.");
+			return fail(say(text::OUTSIDE_FOLDER));
 		}
-		if (!fits_ansi_code_page(here.wstring()) &&
-			!ask(L"HalfCraft's folder has characters in its path that Half-Life 2 may not read:\n" + here.wstring() +
-				L"\n\nIf the game doesn't start, move the HalfCraft folder somewhere with a plain English path, like C:\\Games\\HalfCraft.\n\nStart anyway?")) {
+		if (!fits_ansi_code_page(here.wstring()) && !ask(say(text::ODD_PATH, { here.wstring() }))) {
 			return 1;
 		}
 
 		const std::wstring steam = registry_string(STEAM_KEY, L"SteamPath");
 		if (steam.empty()) {
-			return fail(L"Steam isn't installed. HalfCraft needs Half-Life 2 from Steam.");
+			return fail(say(text::NO_STEAM));
 		}
 		const auto libraries = steam_libraries(steam);
 		if (app_dir(libraries, HALF_LIFE_2).empty()) {
-			if (ask(std::wstring(HALF_LIFE_2.name) + L" isn't installed. HalfCraft needs it from Steam.\n\nOpen Steam to install it?")) {
+			if (ask(say(text::NO_HALF_LIFE_2))) {
 				::ShellExecuteW(nullptr, L"open", (L"steam://install/" + std::to_wstring(HALF_LIFE_2.id)).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			}
 			return 1;
@@ -431,8 +489,7 @@ namespace
 		// source allows one game at a time, whichever engine runs it
 		for (const auto& running : ENGINES) {
 			if (process_running(running.exe)) {
-				return fail(std::wstring(running.app.name) + L" (" + running.exe +
-					L") is already running, and only one Source game can run at a time. Close it, then start HalfCraft again.");
+				return fail(say(text::ALREADY_RUNNING, { running.app.name, running.exe }));
 			}
 		}
 
@@ -442,13 +499,12 @@ namespace
 		}
 		const fs::path game = game_dir(here, *engine);
 		if (!is_game_dir(game)) {
-			return fail(L"The " + game.filename().wstring() + L" folder next to HalfCraft.exe is missing. Unpack the whole HalfCraft zip again.");
+			return fail(say(text::MISSING_FOLDER, { game.filename().wstring() }));
 		}
 		const fs::path  exe = app_dir(libraries, engine->app) / engine->exe;
 		std::error_code ec;
 		if (!fs::exists(exe, ec)) {
-			return fail(std::wstring(engine->app.name) + L" has no " + engine->exe +
-				L". Let Steam update it, or check its files (Properties, Installed Files, Verify integrity).");
+			return fail(say(text::MISSING_ENGINE_EXE, { engine->app.name, engine->exe }));
 		}
 
 		if (!ensure_steam() || !ensure_minecraft(game)) {
@@ -465,16 +521,47 @@ namespace
 		STARTUPINFOW        startup{ sizeof(startup) };
 		PROCESS_INFORMATION process{};
 		if (!::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, exe.parent_path().c_str(), &startup, &process)) {
-			return fail(L"Couldn't start " + exe.wstring() + L" (error " + std::to_wstring(::GetLastError()) + L").");
+			const DWORD error = ::GetLastError();
+			return fail(say(text::ENGINE_WONT_START, { exe.wstring(), std::to_wstring(error) }));
 		}
 		::CloseHandle(process.hThread);
 		::CloseHandle(process.hProcess);
 		return 0;
 	}
+
+	/// --strings <file>: the language it picked and every text it can show (their {0}s unfilled), utf-8,
+	/// for tests and translators. starts nothing.
+	int write_strings(const fs::path& file)
+	{
+		wchar_t     chosen[64]{};
+		const DWORD length = ::GetEnvironmentVariableW(LANGUAGE_VARIABLE, chosen, static_cast<DWORD>(std::size(chosen)));
+		wchar_t     windows[16];
+		std::swprintf(windows, std::size(windows), L"0x%04X", static_cast<unsigned>(::GetUserDefaultUILanguage()));
+		std::wstring all = std::wstring(L"language: ") + (russian ? L"ru" : L"en") + L"\n" + LANGUAGE_VARIABLE + L": " +
+			(length > 0 && length < std::size(chosen) ? chosen : L"(not set)") + L"\nwindows display language: " + windows + L"\n";
+		for (const Text* each : text::ALL) {
+			all += L"---\n";
+			all += say(*each);
+			all += L'\n';
+		}
+		std::ofstream out(file, std::ios::binary);
+		out << narrow(all);
+		return out.good() ? 0 : 1;
+	}
 }
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
+	russian = speaks_russian();
+	int            count = 0;
+	LPWSTR*        args = ::CommandLineToArgvW(::GetCommandLineW(), &count);
+	const bool     strings = args && count == 3 && std::wcscmp(args[1], L"--strings") == 0;
+	const fs::path file = strings ? fs::path(args[2]) : fs::path();
+	::LocalFree(static_cast<HLOCAL>(args));
+	if (strings) {
+		return write_strings(file);
+	}
+
 	// a second click while the first one waits (for steam, or the first sign-in) does nothing
 	HANDLE single = ::CreateMutexW(nullptr, TRUE, L"Local\\HalfCraft_launcher");
 	if (single && ::GetLastError() == ERROR_ALREADY_EXISTS) {
