@@ -20,8 +20,8 @@ It runs on either of two engines, from the same code:
 
 | Engine id | Engine | Built from |
 |---|---|---|
-| `hl2` | Half-Life 2's own (`hl2.exe`, 32-bit): Half-Life 2 is all a player needs | Valve's singleplayer SDK as of 2015 (`source-sdk-2013-sp`), patched to build with today's Visual Studio |
-| `hl2dm` | Half-Life 2: Deathmatch's (`hl2mp_win64.exe`, 64-bit, more memory) | [hl2dm-sp](https://github.com/hardlightbridge/hl2dm-sp): Valve's 2025 SDK with the campaigns running on that engine (`source-sdk-2013`) |
+| `hl2` | Half-Life 2's own (`hl2.exe`, 32-bit): Half-Life 2 is all a player needs, but digging through Half-Life's walls needs `hl2dm` (no world shader dll here) | Valve's singleplayer SDK as of 2015 (`source-sdk-2013-sp`), patched to build with today's Visual Studio |
+| `hl2dm` | Half-Life 2: Deathmatch's (`hl2mp_win64.exe`, 64-bit, more memory): digging through Half-Life's walls works here only, and `make run` and HalfCraft.exe default to it | [hl2dm-sp](https://github.com/hardlightbridge/hl2dm-sp): Valve's 2025 SDK with the campaigns running on that engine (`source-sdk-2013`) |
 
 Each engine gets its own game folder (`game-hl2`, `game-hl2dm`): their saves don't mix. Minecraft's
 world is the same.
