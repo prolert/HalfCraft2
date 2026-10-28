@@ -1,6 +1,7 @@
 // game_shader_generic_halfcraft.dll: client.dll's mask of the cells minecraft dug, for the world shaders (see
 // hc_shader_dig.h).
 
+#include "materialsystem/itexture.h"
 #include "shaderlib/cshader.h"
 #include "tier0/dbg.h"
 
@@ -47,7 +48,7 @@ namespace halfcraft
 	void shader_dig_dynamic(CBaseShader* shader, IShaderDynamicAPI* api)
 	{
 		const DigMaskState* state = shader_dig_mask();
-		if (state && state->texture) {
+		if (state && state->texture && !state->texture->IsError()) {
 			shader->BindTexture(DIG_MASK_SAMPLER, state->texture);
 			api->SetPixelShaderConstant(DIG_ORIGIN_REGISTER, state->origin, 1);
 			api->SetPixelShaderConstant(DIG_LAYOUT_REGISTER, state->layout, 1);

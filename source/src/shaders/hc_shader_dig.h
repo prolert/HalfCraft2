@@ -21,7 +21,7 @@ namespace halfcraft
 	/// a shader's shadow state: s15 is sampled
 	void shader_dig_shadow(IShaderShadow* shadow);
 
-	/// a shader's dynamic state: the mask in s15, c20 and c21 (DigMaskState). without a mask, a black texture and zeros:
-	/// nothing is clipped
+	/// a shader's dynamic state: the mask in s15, c20 and c21 (DigMaskState). without a mask, or with one the material
+	/// system marks an error texture, a black texture and zeros: nothing is clipped
 	void shader_dig_dynamic(CBaseShader* shader, IShaderDynamicAPI* api);
 }

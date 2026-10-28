@@ -48,6 +48,10 @@ namespace halfcraft
 	/// walls can be seen then (hc_blocks.cpp draws its sections, client_draw_unplaced_blocks).
 	bool dig_holes_near();
 
+	/// HalfCraftClientSystem::LevelInitPostEntity: the mask's texture goes up whole again before the shader next clips by
+	/// it (a level load may have changed it behind client.dll's back).
+	void dig_level_loaded();
+
 	/// ClientModeShared::PostRenderVGui (the frame is finished): hc_debug_dig_mask_dump reads the mask's texture back here.
 	void dig_post_render_vgui();
 

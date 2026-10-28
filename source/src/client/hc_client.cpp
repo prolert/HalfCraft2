@@ -194,7 +194,11 @@ namespace halfcraft
 			void Update(float frametime) override { update(frametime); }
 
 			// every level load: a map change, a transition, a save loaded (also of the same map)
-			void LevelInitPostEntity() override { level_loaded_ = true; }
+			void LevelInitPostEntity() override
+			{
+				level_loaded_ = true;
+				dig_level_loaded();
+			}
 
 		private:
 			void update(float frametime);

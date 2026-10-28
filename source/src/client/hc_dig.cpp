@@ -41,10 +41,11 @@ namespace halfcraft
 {
 	namespace
 	{
-		constexpr int   SECTION_BLOCKS = 16;
-		constexpr int   TEXEL_BYTES = 4;  // the dig mask's rgba
-		constexpr float CROSSHAIR_REACH = 180.0f;  // units hc_debug_dig_cell looks for a wall in (4.5 blocks: minecraft's reach)
-		constexpr float INTO_WALL = 0.5f;          // units behind the face under the crosshair: in the cell the face belongs to
+		constexpr int    SECTION_BLOCKS = 16;
+		constexpr int    TEXEL_BYTES = 4;  // the dig mask's rgba
+		constexpr float  CROSSHAIR_REACH = 180.0f;  // units hc_debug_dig_cell looks for a wall in (4.5 blocks: minecraft's reach)
+		constexpr float  INTO_WALL = 0.5f;          // units behind the face under the crosshair: in the cell the face belongs to
+		constexpr double READBACK_TIMEOUT_SECONDS = 2.0;  // hc_debug_dig_mask_dump waits for a frame, then for its read
 
 		ConVar hc_dig("hc_dig", "1", FCVAR_ARCHIVE, "halfcraft: 0 - minecraft digs no new cells out of half-life's walls (the ones dug stay dug)");
 		ConVar hc_debug_dig_mask("hc_debug_dig_mask", "0", 0,
@@ -56,6 +57,11 @@ namespace halfcraft
 		int  g_old_portals = 0;
 
 		bool g_holes_near = false;  // dig_holes_near's, as dig_update last found it
+
+		// the mask's texture may not hold its image any more (a level load, the material system's restore): the next frame
+		// with a cell dug in the mask uploads it whole before the shader takes it (mask_needs_upload_before_clip)
+		std::atomic<bool> g_mask_resync{ false };
+		bool              g_restore_func_added = false;  // restore_mask is the material system's
 
 		using SectionKey = std::tuple<int, int, int>;  // a section, minecraft section coords
 		using StoredSection = std::pair<DugSection, std::uint32_t>;  // a section's cells, with the version it last changed at
@@ -298,6 +304,25 @@ namespace halfcraft
 			log_info("hc_debug_dig_cell: cell %d %d %d %s", cell[0], cell[1], cell[2], dig ? "dug" : "filled");
 		}
 
+		/// hc_debug_dig_cell: the cell of the wall under the crosshair, the one its face there belongs to
+		/// @return false when there's no wall within reach
+		bool crosshair_cell(int cell[3])
+		{
+			// the world's brushes alone: a player clip in front of a wall would stop the ray before it
+			CTraceFilterWorldOnly filter;
+			trace_t               tr;
+			UTIL_TraceLine(MainViewOrigin(), MainViewOrigin() + MainViewForward() * CROSSHAIR_REACH, MASK_SOLID_BRUSHONLY, &filter, &tr);
+			if (tr.fraction == 1.0f) {
+				return false;
+			}
+			const Vector inside = tr.endpos - tr.plane.normal * INTO_WALL;
+			const McVec  mc = source_to_mc(inside.Base(), current_slot());
+			cell[0] = static_cast<int>(std::floor(mc.x));
+			cell[1] = static_cast<int>(std::floor(mc.y));
+			cell[2] = static_cast<int>(std::floor(mc.z));
+			return true;
+		}
+
 		/// hc_debug_dig_mask_dump's: the mask's texture copied into the back buffer and read back, against its image
 		struct MaskReadback
 		{
@@ -310,11 +335,15 @@ namespace halfcraft
 			std::atomic<bool>         done{ false };
 		};
 
-		std::unique_ptr<MaskReadback> g_readback;  // asked for, read back at the next finished frame
+		// asked for (wanted: the next finished frame takes it), then read back where the material system draws
+		std::unique_ptr<MaskReadback> g_readback;
 		bool                          g_readback_wanted = false;
+		double                        g_readback_since = 0.0;  // when it was asked for, or queued for the read
+		// given up on, but the render thread may still write them: freed once it has
+		std::vector<std::unique_ptr<MaskReadback>> g_abandoned_readbacks;
 
 		/// runs where the material system draws: on the main thread, or in order on its render thread when it queues. the
-		/// texture goes into the back buffer's corner (over the finished frame) a band of rows at a time
+		/// texture goes into the back buffer's corner a band of rows at a time, over the finished frame: it's presented so
 		void read_back_mask(MaskReadback* readback)
 		{
 			CMatRenderContextPtr context(materials);
@@ -329,15 +358,15 @@ namespace halfcraft
 			readback->done.store(true, std::memory_order_release);
 		}
 
-		/// the texel's red in the image (rgba) and in what the gpu gave back (rgb)
-		bool image_dug(const MaskReadback& r, std::size_t texel)
+		/// a texel's red in the mask's image (rgba) and in what the gpu gave back (rgb)
+		bool image_texel_dug(const MaskReadback& r, std::size_t texel)
 		{
 			return r.image[texel * TEXEL_BYTES] != 0;
 		}
 
-		bool texture_dug(const MaskReadback& r, std::size_t texel)
+		bool texture_texel_dug(const MaskReadback& r, std::size_t texel)
 		{
-			return r.pixels[texel * 3] > 127;
+			return r.pixels[texel * 3] > 127;  // the shader's 0.5
 		}
 
 		/// a read-back mask compared with the image it should have, layer by layer (logged), and written to <name>.tga
@@ -351,7 +380,7 @@ namespace halfcraft
 				for (int j = 0; j < DigMaskLayout::SIZE_XZ; ++j) {
 					for (int i = 0; i < DigMaskLayout::SIZE_XZ; ++i) {
 						const std::size_t texel = static_cast<std::size_t>(v + j) * DigMaskLayout::TEXTURE + u + i;
-						const bool        image = image_dug(r, texel), texture = texture_dug(r, texel);
+						const bool        image = image_texel_dug(r, texel), texture = texture_texel_dug(r, texel);
 						in_image += image ? 1 : 0;
 						in_texture += texture ? 1 : 0;
 						differ += image != texture ? 1 : 0;
@@ -378,8 +407,8 @@ namespace halfcraft
 				file.c_str());
 		}
 
-		/// hc_debug_dig_mask_dump: the next finished frame reads the mask's texture back (dig_post_render_vgui), and a later
-		/// dig_update compares it with the image the mask had in that frame
+		/// hc_debug_dig_mask_dump: the next finished frame with the hud reads the mask's texture back (dig_post_render_vgui),
+		/// and a later dig_update compares it with the image the mask had in that frame
 		void dump_mask(const char* name)
 		{
 			const auto& m = mask();
@@ -391,46 +420,35 @@ namespace halfcraft
 				log_info("hc_debug_dig_mask_dump: still reading the last one back");
 				return;
 			}
-			int width = 0, height = 0;
-			materials->GetBackBufferDimensions(width, height);
-			if (width < DigMaskLayout::TEXTURE || height <= 0) {
-				log_info("hc_debug_dig_mask_dump: the %dx%d back buffer is narrower than the mask's %d texels: run the game wider", width, height, DigMaskLayout::TEXTURE);
-				return;
-			}
 			g_readback = std::make_unique<MaskReadback>();
 			g_readback->name = name;
 			g_readback->texture = m.texture.texture();
-			g_readback->band = std::min(height, DigMaskLayout::TEXTURE);
-			g_readback->pixels.resize(static_cast<std::size_t>(DigMaskLayout::TEXTURE) * DigMaskLayout::TEXTURE * 3);
 			g_readback_wanted = true;
+			g_readback_since = Plat_FloatTime();
 		}
 
-		/// a readback that came back is compared and written (main thread, each frame)
+		/// main thread, each frame: a readback that came back is compared and written; one that no frame took, or that the
+		/// render thread didn't finish, within READBACK_TIMEOUT_SECONDS is given up on
 		void readback_update()
 		{
-			if (g_readback && !g_readback_wanted && g_readback->done.load(std::memory_order_acquire)) {
+			g_abandoned_readbacks.erase(std::remove_if(g_abandoned_readbacks.begin(), g_abandoned_readbacks.end(),
+											[](const std::unique_ptr<MaskReadback>& readback) { return readback->done.load(std::memory_order_acquire); }),
+				g_abandoned_readbacks.end());
+			if (!g_readback) {
+				return;
+			}
+			if (!g_readback_wanted && g_readback->done.load(std::memory_order_acquire)) {
 				finish_readback(*g_readback);
 				g_readback.reset();
+			} else if (Plat_FloatTime() - g_readback_since > READBACK_TIMEOUT_SECONDS) {
+				log_info("hc_debug_dig_mask_dump: %s within %.0f s: given up", g_readback_wanted ? "no frame with the hud came" : "the render thread didn't read it back",
+					READBACK_TIMEOUT_SECONDS);
+				if (!g_readback_wanted) {
+					g_abandoned_readbacks.push_back(std::move(g_readback));
+				}
+				g_readback.reset();
+				g_readback_wanted = false;
 			}
-		}
-
-		/// hc_debug_dig_cell: the cell of the wall under the crosshair, the one its face there belongs to
-		/// @return false when there's no wall within reach
-		bool crosshair_cell(int cell[3])
-		{
-			// the world's brushes alone: a player clip in front of a wall would stop the ray before it
-			CTraceFilterWorldOnly filter;
-			trace_t               tr;
-			UTIL_TraceLine(MainViewOrigin(), MainViewOrigin() + MainViewForward() * CROSSHAIR_REACH, MASK_SOLID_BRUSHONLY, &filter, &tr);
-			if (tr.fraction == 1.0f) {
-				return false;
-			}
-			const Vector inside = tr.endpos - tr.plane.normal * INTO_WALL;
-			const McVec  mc = source_to_mc(inside.Base(), current_slot());
-			cell[0] = static_cast<int>(std::floor(mc.x));
-			cell[1] = static_cast<int>(std::floor(mc.y));
-			cell[2] = static_cast<int>(std::floor(mc.z));
-			return true;
 		}
 
 		/// the sections dug_since gives, into m.sections
@@ -445,10 +463,20 @@ namespace halfcraft
 			return std::min(changed, dug_since(since, m.sections.data(), changed, now));
 		}
 
+		/// MaterialBufferRestoreFunc_t: the material system has its resources back after a device reset or a mode change
+		void restore_mask(int /*change_flags*/)
+		{
+			g_mask_resync.store(true, std::memory_order_release);
+		}
+
 		/// the mask's image laid out afresh in its layout, with every section that has cells dug, and the whole texture
 		/// uploaded (made the first time: only ever once, at one size, since the material system's thread may draw with it)
 		void rebuild_mask(DigMask& m)
 		{
+			if (!g_restore_func_added) {
+				materials->AddRestoreFunc(restore_mask);
+				g_restore_func_added = true;
+			}
 			m.rgba.assign(static_cast<std::size_t>(DigMaskLayout::TEXTURE) * DigMaskLayout::TEXTURE * TEXEL_BYTES, 0);
 			m.dug = false;
 			const int all = sections_since(m, 0, nullptr);
@@ -504,10 +532,10 @@ namespace halfcraft
 		}
 
 		/// the mask follows the store; without the shader dll it's all zeros. the shader dll clips by it only while a cell
-		/// is dug in it, whatever hc_dig says: with none, it gets no texture and clips nothing. the texture isn't uploaded
-		/// again while no cell is dug in it (mask_needs_rebuild), and the material system drops an upload while the device
-		/// is away (CTexture::BDownload), so what the gpu has then needn't be the image. a first cell dug in it lays the
-		/// image out and uploads it whole before the shader dll takes it.
+		/// is dug in it, whatever hc_dig says: with none, it gets no texture and clips nothing, whatever the gpu holds of
+		/// it (on d2_coast_01, with no cell dug on the map, cliffs were cut in 40-unit layers: the texture sampled had
+		/// whole layers red that client.dll never wrote). when a cell comes into it, and after a level load or the
+		/// material system's restore, its image goes up whole before the shader dll takes it (mask_needs_upload_before_clip).
 		/// @return whether a cell is dug in the mask
 		bool mask_update(const McVec& player)
 		{
@@ -517,20 +545,27 @@ namespace halfcraft
 				m.clipping = false;
 				return false;
 			}
+			if (g_mask_resync.exchange(false, std::memory_order_acq_rel)) {
+				m.clipping = false;
+				if (hc_debug_dig_mask.GetBool()) {
+					log_info("dig: a level load or the material system's restore: the mask goes up whole before the shader next clips by it");
+				}
+			}
 			std::uint32_t now = m.version;
 			const int     changed = sections_since(m, m.version, &now);
 			m.version = now;
-			bool whole = false;  // the image went up whole this frame
+			bool recentred = false, whole = false;  // the layout moved; the image went up whole this frame
 			if (!m.built || m.layout.needs_recentre(player.x, player.y, player.z)) {
+				recentred = true;
 				whole = recentre_mask(m, player);  // the sections that changed are in it, or nothing dug is
-			} else {
+			}
+			const bool dug = any_dug_in(m.layout);
+			if (mask_needs_upload_before_clip(dug, m.clipping, whole)) {
+				rebuild_mask(m);  // the sections that changed with the rest
+			} else if (!recentred) {
 				for (int i = 0; i < changed; ++i) {
 					update_mask(m, m.sections[i]);
 				}
-			}
-			const bool dug = any_dug_in(m.layout);
-			if (dug && !m.clipping && !whole) {
-				rebuild_mask(m);
 			}
 			m.clipping = dug;
 			m.state.texture = dug ? m.texture.texture() : nullptr;
@@ -613,15 +648,30 @@ namespace halfcraft
 		return g_holes_near;
 	}
 
+	void dig_level_loaded()
+	{
+		g_mask_resync.store(true, std::memory_order_release);
+	}
+
 	void dig_post_render_vgui()
 	{
 		if (!g_readback_wanted) {
 			return;
 		}
 		g_readback_wanted = false;
+		int width = 0, height = 0;
+		materials->GetBackBufferDimensions(width, height);
+		if (width < DigMaskLayout::TEXTURE || height <= 0) {
+			log_info("hc_debug_dig_mask_dump: the %dx%d back buffer is narrower than the mask's %d texels: run the game wider", width, height, DigMaskLayout::TEXTURE);
+			g_readback.reset();
+			return;
+		}
+		g_readback->band = std::min(height, DigMaskLayout::TEXTURE);
+		g_readback->pixels.resize(static_cast<std::size_t>(DigMaskLayout::TEXTURE) * DigMaskLayout::TEXTURE * 3);
 		// the frame's image: its uploads went in before the frame was drawn (dig_update)
 		g_readback->image = mask().rgba;
 		g_readback->layout = mask().layout;
+		g_readback_since = Plat_FloatTime();
 		CMatRenderContextPtr context(materials);
 		if (ICallQueue* queue = context->GetCallQueue()) {
 			queue->QueueCall(read_back_mask, g_readback.get());
@@ -633,11 +683,18 @@ namespace halfcraft
 	void dig_shutdown()
 	{
 		// a readback the render thread may still write goes with the process
-		if (g_readback && !g_readback->done.load(std::memory_order_acquire)) {
-			static_cast<void>(g_readback.release());
+		g_abandoned_readbacks.push_back(std::move(g_readback));
+		for (auto& readback : g_abandoned_readbacks) {
+			if (readback && !readback->done.load(std::memory_order_acquire)) {
+				static_cast<void>(readback.release());
+			}
 		}
-		g_readback.reset();
+		g_abandoned_readbacks.clear();
 		g_readback_wanted = false;
+		if (g_restore_func_added) {
+			materials->RemoveRestoreFunc(restore_mask);
+			g_restore_func_added = false;
+		}
 		force_vis(false);
 		g_holes_near = false;
 		auto& m = mask();
@@ -721,7 +778,7 @@ CON_COMMAND(hc_debug_dig_cell,
 
 CON_COMMAND(hc_debug_dig_mask_dump,
 	"halfcraft: log the dig mask's layers with cells dug and write its texture as the gpu has it to a tga (the layers in tiles of 8 x 8, red where "
-	"a cell is dug): hc_debug_dig_mask_dump [name] (dig_mask by default)")
+	"a cell is dug): hc_debug_dig_mask_dump [name] (dig_mask by default). the next frame with the hud shows the mask over its top left corner")
 {
 	halfcraft::dump_mask(args.ArgC() >= 2 ? args[1] : "dig_mask");
 }

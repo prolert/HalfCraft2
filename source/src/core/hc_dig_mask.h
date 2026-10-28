@@ -170,4 +170,16 @@ namespace halfcraft
 	{
 		return !built || image_dug || dug_in_layout;
 	}
+
+	/// whether the dig mask lays its image out afresh and uploads it whole before the shader clips by it this frame, instead
+	/// of taking the sections that changed. the shader clips only while a cell is dug in the mask, and what the gpu holds of
+	/// a mask it didn't clip by isn't known to be the image: nothing uploads it then (mask_needs_rebuild), and a level load
+	/// or the material system restoring its resources may have changed it behind client.dll's back.
+	/// @param dug_in_layout - a section with cells dug lies in the mask's layout
+	/// @param clipping - the shader clipped by the mask the frame before, and nothing since may have changed the texture
+	/// @param whole - this frame has laid the image out and uploaded it whole already (a recentre that rebuilt it)
+	inline bool mask_needs_upload_before_clip(bool dug_in_layout, bool clipping, bool whole)
+	{
+		return dug_in_layout && !clipping && !whole;
+	}
 }

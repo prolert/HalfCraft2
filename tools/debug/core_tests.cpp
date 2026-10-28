@@ -859,6 +859,20 @@ namespace
 		CHECK(mask_needs_rebuild(true, true, true));
 	}
 
+	void test_dig_mask_upload_before_clip()
+	{
+		// the first cell dug in the mask: the whole image goes up before the shader takes it
+		CHECK(mask_needs_upload_before_clip(true, false, false));
+		// a recentre has just uploaded it whole: once is enough
+		CHECK(!mask_needs_upload_before_clip(true, false, true));
+		// the shader clipped by it the frame before: the sections that changed are enough
+		CHECK(!mask_needs_upload_before_clip(true, true, false));
+		CHECK(!mask_needs_upload_before_clip(true, true, true));
+		// no cell dug in the mask: the shader doesn't take it, nothing to upload
+		CHECK(!mask_needs_upload_before_clip(false, false, false));
+		CHECK(!mask_needs_upload_before_clip(false, true, false));
+	}
+
 	void test_dug_cells()
 	{
 		// section (-1, 0, 2) (blocks from -16, 0, 32): bit 0 is block (0, 0, 0) of it, bit 561 (byte 70, bit 1) block (1, 2, 3)
@@ -1035,6 +1049,7 @@ int run_tests()
 	test_dig_mask_write_section();
 	test_dig_mask_has_section();
 	test_dig_mask_needs_rebuild();
+	test_dig_mask_upload_before_clip();
 	test_dug_cells();
 	test_dug_pending();
 	test_triangle_clip();
