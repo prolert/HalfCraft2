@@ -34,10 +34,12 @@ namespace halfcraft
 	/// once per frame, after the frame's messages. the sections a kRenClearAll left pending that minecraft hasn't sent
 	/// again within 2 s are emptied first. with the shader dll, the dig mask takes the sections that changed (placed
 	/// around the player when it's new or the player went too far from its centre: laid out afresh and uploaded then,
-	/// unless no cell is dug in it before or after, core/hc_dig_mask.h's mask_needs_rebuild). while a cell is dug in the
-	/// mask (the holes the shader dll cuts out of the walls of the map being played, whatever hc_dig says), r_novis 1
-	/// and r_portalsopenall 1: the rooms behind the holes are drawn whatever the map's vis says. their old values come
-	/// back once no hole is in the mask (holes further away are drawn closed), and off the map.
+	/// unless no cell is dug in it before or after, core/hc_dig_mask.h's mask_needs_rebuild). the shader dll clips by it
+	/// only while a cell is dug in it (laid out and uploaded whole as the first one comes): with none, it has no texture to
+	/// clip by, whatever the gpu kept of it. while a cell is dug in the mask (the holes the shader dll cuts out of the
+	/// walls of the map being played, whatever hc_dig says), r_novis 1 and r_portalsopenall 1: the rooms behind the holes
+	/// are drawn whatever the map's vis says. their old values come back once no hole is in the mask (holes further away
+	/// are drawn closed), and off the map.
 	/// @param player - the player's feet, minecraft coords
 	/// @param in_game - a map is being played (HalfCraftClientSystem::update's)
 	void dig_update(const McVec& player, bool in_game);
@@ -45,6 +47,9 @@ namespace halfcraft
 	/// whether dig_update found a hole in the dig mask (r_novis is 1 for it): what's dug in the rock behind the map's
 	/// walls can be seen then (hc_blocks.cpp draws its sections, client_draw_unplaced_blocks).
 	bool dig_holes_near();
+
+	/// ClientModeShared::PostRenderVGui (the frame is finished): hc_debug_dig_mask_dump reads the mask's texture back here.
+	void dig_post_render_vgui();
 
 	/// gives r_novis and r_portalsopenall their old values back, frees the dig mask and drops every section (client
 	/// shutdown).

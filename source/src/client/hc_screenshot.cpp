@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "client/hc_client.h"
+#include "client/hc_dig.h"
 #include "core/hc_log.h"
 #include "shared/hc_bridge.h"
 #include "shared/hc_hooks.h"
@@ -242,6 +243,7 @@ namespace halfcraft
 	void client_post_render_vgui()
 	{
 		g_screenshots.frame_finished();
+		dig_post_render_vgui();
 	}
 }
 
