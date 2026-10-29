@@ -1,4 +1,5 @@
-"""what windows knows about other processes and the files and mutexes they hold, through its own api."""
+"""what windows knows about other processes and the files and mutexes they hold, and a game's console it can type
+into, through its own api."""
 
 import ctypes
 import msvcrt
@@ -7,6 +8,8 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
+
+from halfcraft import ToolError
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -21,7 +24,14 @@ _ERROR_FILE_NOT_FOUND = 2
 _ERROR_PATH_NOT_FOUND = 3
 _ERROR_SHARING_VIOLATION = 32
 _ERROR_LOCK_VIOLATION = 33
+_WM_COPYDATA = 0x004A
+_SMTO_ABORTIFHUNG = 0x2
+_SEND_TIMEOUT_MS = 10000
 INVALID_HANDLE = ctypes.c_void_p(-1).value
+# 1970-01-01 in windows' ticks (100 ns since 1601), for Process.started against a file's time
+UNIX_EPOCH_TICKS = 116444736000000000
+# the window source's engine runs typed console input from (WM_COPYDATA's text, as -hijack's launcher sends it)
+GAME_WINDOW_CLASS = "Valve001"
 
 # tools/game/hidden_desktop.py's desktop, and the variable it sets for what it runs (gradle runs without a daemon then)
 HIDDEN_DESKTOP = "HalfCraftTest"
@@ -66,6 +76,25 @@ _user32.EnumDesktopWindows.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintype
 _user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
 _ENUM_WINDOWS = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 _kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+_kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+_user32.GetThreadDesktop.argtypes = (wintypes.DWORD,)
+_user32.GetThreadDesktop.restype = wintypes.HANDLE
+_user32.SetThreadDesktop.argtypes = (wintypes.HANDLE,)
+_user32.GetClassNameW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+_user32.SendMessageTimeoutW.argtypes = (
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+    wintypes.UINT,
+    wintypes.UINT,
+    ctypes.POINTER(ctypes.c_size_t),
+)
+_user32.SendMessageTimeoutW.restype = ctypes.c_ssize_t
+
+
+class _CopyData(ctypes.Structure):
+    _fields_ = (("dwData", ctypes.c_size_t), ("cbData", wintypes.DWORD), ("lpData", ctypes.c_void_p))
 
 
 @dataclass(frozen=True)
@@ -75,7 +104,8 @@ class Process:
     started: int | None  # when, in windows' 100 ns ticks; None when windows won't say
 
 
-def _started(pid: int) -> int | None:
+def started(pid: int) -> int | None:
+    """when a process started, in windows' 100 ns ticks (utc); None when windows won't say."""
     handle = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return None
@@ -109,7 +139,8 @@ def exe_path(pid: int) -> str | None:
 
 
 def runs_exe(pid: int, exe: Path) -> bool:
-    """whether a process runs this very exe (not just one of its name): the paths resolved, case aside. False when windows won't give its path."""
+    """whether a process runs this very exe (not just one of its name): the paths resolved, case aside. False when windows won't give its path,
+    as for a process that has exited (even while a handle keeps its pid)."""
     path = exe_path(pid)
     return path is not None and str(Path(path).resolve()).lower() == str(exe.resolve()).lower()
 
@@ -126,25 +157,75 @@ def close_desktop(handle: int) -> None:
     _user32.CloseDesktop(handle)
 
 
-def windows_on_hidden_desktop() -> list[tuple[int, int]]:
-    """the top-level windows on HIDDEN_DESKTOP with their processes' pids, front to back (none when it isn't there)."""
-    desktop = open_hidden_desktop(create=False)
-    if not desktop:
-        return []
+def _desktop_windows(desktop: int) -> list[tuple[int, int]]:
+    """the top-level windows on a desktop with their processes' pids, front to back."""
     found: list[tuple[int, int]] = []
 
     def each(window: int, _: int) -> bool:
         pid = wintypes.DWORD()
         _user32.GetWindowThreadProcessId(window, ctypes.byref(pid))
-        if pid.value != os.getpid():
-            found.append((window, pid.value))
+        found.append((window, pid.value))
         return True
 
+    _user32.EnumDesktopWindows(desktop, _ENUM_WINDOWS(each), 0)
+    return found
+
+
+def windows_on_hidden_desktop() -> list[tuple[int, int]]:
+    """the top-level windows on HIDDEN_DESKTOP with their processes' pids, front to back (none when it isn't there)."""
+    desktop = open_hidden_desktop(create=False)
+    if not desktop:
+        return []
     try:
-        _user32.EnumDesktopWindows(desktop, _ENUM_WINDOWS(each), 0)
+        return [(window, pid) for window, pid in _desktop_windows(desktop) if pid != os.getpid()]
     finally:
         _user32.CloseDesktop(desktop)
-    return found
+
+
+def _game_window(desktop: int, pid: int) -> int | None:
+    """the pid's GAME_WINDOW_CLASS window on a desktop, which must be this thread's (window classes don't cross desktops)."""
+    for window, owner in _desktop_windows(desktop):
+        if owner == pid:
+            name = ctypes.create_unicode_buffer(64)
+            _user32.GetClassNameW(window, name, len(name))
+            if name.value == GAME_WINDOW_CLASS:
+                return window
+    return None
+
+
+def _type_into(window: int, pid: int, text: str) -> None:
+    raw = text.encode("mbcs", errors="replace") + b"\0"
+    buffer = ctypes.create_string_buffer(raw, len(raw))
+    data = _CopyData(0, len(raw), ctypes.cast(buffer, ctypes.c_void_p))
+    result = ctypes.c_size_t()
+    if not _user32.SendMessageTimeoutW(window, _WM_COPYDATA, 0, ctypes.addressof(data), _SMTO_ABORTIFHUNG, _SEND_TIMEOUT_MS, ctypes.byref(result)):
+        raise ToolError(f"'{text}' didn't reach {pid}: {ctypes.WinError(ctypes.get_last_error())}")
+
+
+def send_console(pid: int, text: str) -> None:
+    """types a line into the console of the source game with this pid, the way -hijack's launcher hands the game its
+    arguments but to this game alone: WM_COPYDATA (the text in the ansi code page and a nul) to its GAME_WINDOW_CLASS
+    window, which runs it as console input. the window is looked for on this thread's desktop, then on HIDDEN_DESKTOP
+    with this thread moved there for the while (messages don't cross desktops). a ToolError when the game has no such
+    window on either, or doesn't take the text within 10 s or hangs."""
+    own = _user32.GetThreadDesktop(_kernel32.GetCurrentThreadId())
+    if window := _game_window(own, pid):
+        _type_into(window, pid, text)
+        return
+    hidden = open_hidden_desktop(create=False)
+    if not hidden:
+        raise ToolError(f"no {GAME_WINDOW_CLASS} window of {pid}")
+    try:
+        if not _user32.SetThreadDesktop(hidden):
+            raise ToolError(f"can't reach {HIDDEN_DESKTOP}, where {pid} may be: {ctypes.WinError(ctypes.get_last_error())}")
+        try:
+            if not (window := _game_window(hidden, pid)):
+                raise ToolError(f"no {GAME_WINDOW_CLASS} window of {pid}")
+            _type_into(window, pid, text)
+        finally:
+            _user32.SetThreadDesktop(own)
+    finally:
+        close_desktop(hidden)
 
 
 def processes(*names: str) -> list[Process]:
@@ -159,7 +240,7 @@ def processes(*names: str) -> list[Process]:
         more = _kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
         while more:
             if entry.szExeFile.lower() in wanted:
-                found.append(Process(entry.th32ProcessID, entry.szExeFile, _started(entry.th32ProcessID)))
+                found.append(Process(entry.th32ProcessID, entry.szExeFile, started(entry.th32ProcessID)))
             more = _kernel32.Process32NextW(snapshot, ctypes.byref(entry))
     finally:
         _kernel32.CloseHandle(snapshot)

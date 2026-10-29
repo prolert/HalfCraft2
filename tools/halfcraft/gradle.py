@@ -14,7 +14,7 @@ MINECRAFT = REPO / "minecraft"
 JDK_VENDORS = ("Eclipse Adoptium", "Java", "Microsoft", "Zulu", "Amazon Corretto")
 # a build, its tests or a check; the clients run as long as they're played
 SECONDS = 3600
-CLIENTS = {"runClient", "runTestClient"}
+CLIENTS = {"runClient", "runTestClient", "runTestGuestClient"}
 
 
 def find_jdk() -> Path:

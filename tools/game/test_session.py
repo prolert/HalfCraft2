@@ -4,19 +4,24 @@ python tools/game/test_session.py start [--engine hl2dm]   puts build\\game-<eng
                                                       (build\\test-session\\<engine>): the test starts without saves
 python tools/game/test_session.py stop [--engine hl2dm]    puts them back; the test's own saves and settings go to
                                                       build\\test-session\\<engine>-last
-python tools/game/test_session.py status                   what's set aside, and which games run
+python tools/game/test_session.py status                   what's set aside, and which games run (a minecraft line
+                                                      for each link)
 python tools/game/test_session.py minecraft                the minecraft test client (make mc-test): its own run
                                                       folder (minecraft\\run\\test) and world (HalfCraftTest)
+python tools/game/test_session.py minecraft --link guest   the second pair's (make mc-test LINK=guest, co-op tests):
+                                                      Gordon2 on link guest, minecraft\\run\\test-guest and
+                                                      HalfCraftTestGuest
 python tools/game/test_session.py dev-client               the player's minecraft dev client (make mc-run)
 
 half-life's saves carry checkpoints of the player's minecraft world, and every changelevel autosaves over them,
 so a test never plays with them. the game folder itself stays: its strings file is named after it
 (resource\\<folder>_english.txt). only one minecraft can hold a link, so neither client starts next to another
-one on it. the test client only starts while every engine has a test session on, the player's only while none has,
-and a session neither starts nor stops while a minecraft runs: otherwise one world plays against the other's
-saves (it follows their loads and rolls back, and their autosaves land on the wrong saves). --engine all (the
-default) does both engines. the link is HALFCRAFT_LINK's (tools/halfcraft/link.py): a client started with it set
-takes it, and only a minecraft on it counts.
+one on it. the test clients only start while every engine has a test session on, the player's only while none has,
+and a session neither starts nor stops while a minecraft runs on any link (the default one, guest's or
+HALFCRAFT_LINK's): otherwise one world plays against the other's saves (it follows their loads and rolls back, and
+their autosaves land on the wrong saves). --engine all (the default) does both engines. the test client and the
+dev client take HALFCRAFT_LINK's link (tools/halfcraft/link.py): a client started with it set takes it, and only a
+minecraft on it counts. the guest's client is on link guest whatever HALFCRAFT_LINK says (minecraft\\build.gradle).
 """
 
 import argparse
@@ -27,14 +32,25 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools\, where the halfcraft package is
-from halfcraft import REPO, ToolError, engines, folders, gradle, link, protocol, windows
+from halfcraft import REPO, ToolError, engines, folders, gradle, protocol, windows
+from halfcraft.link import LinkNames, link_names, this_link
 
 SESSIONS = REPO / "build/test-session"
-# what minecraft (HostLink.announceRunning) holds while it runs on HALFCRAFT_LINK's link: the dev client, the test
-# client or a release's
-MINECRAFT_MUTEX = link.this_link(protocol.load()).minecraft_mutex
 PLAYER_LOG = REPO / "minecraft/run/logs/latest.log"
 TEST_LOG = REPO / "minecraft/run/test/logs/latest.log"
+# the guest pair's link id in co-op tests on one pc, the one link with a minecraft run of its own (runTestGuestClient)
+GUEST = "guest"
+GUEST_LOG = REPO / "minecraft/run/test-guest/logs/latest.log"
+
+
+def __getattr__(name: str) -> str:
+    """MINECRAFT_MUTEX, worked out each time it's read (PEP 562) rather than at import, so a bad HALFCRAFT_LINK is a
+    ToolError where it's read, not one that stops every action: what minecraft (HostLink.announceRunning) holds while
+    it runs on HALFCRAFT_LINK's link (the dev client, the test client or a release's). tools/game/run_minecraft.py
+    imports it."""
+    if name == "MINECRAFT_MUTEX":
+        return this_link(protocol.load()).minecraft_mutex
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @dataclass(frozen=True)
@@ -71,12 +87,28 @@ class Session:
             notes.writelines(f"{line}\n" for line in lines)
 
 
-def minecraft_client() -> str:
-    """ "none", "test" (make mc-test's), "player" (the dev client in minecraft\\run) or "other" (a release's). a
-    running minecraft keeps its latest.log open for writing: that tells which run folder it plays from.
+def test_links() -> list[LinkNames]:
+    """the links a minecraft may run on in a test: the default one, guest's and HALFCRAFT_LINK's (a ToolError when
+    that isn't a link id)."""
+    schema = protocol.load()
+    default = str(schema.constants["kMappingName"].value)
+    found = [link_names(default, None), link_names(default, GUEST), this_link(schema)]
+    return list({names.mapping: names for names in found}.values())
+
+
+def described(names: LinkNames) -> str:
+    return f"link {names.id}" if names.id else "the default link"
+
+
+def client_on(names: LinkNames) -> str:
+    """which minecraft runs on that link: "none", "test" (make mc-test's), "test-guest" (make mc-test LINK=guest's),
+    "player" (the dev client in minecraft\\run) or "other" (a release's). the link's mutex says whether one does; the
+    run folder whose latest.log it keeps open for writing says which.
     """
-    if not windows.mutex_exists(MINECRAFT_MUTEX):
+    if not windows.mutex_exists(names.minecraft_mutex):
         return "none"
+    if names.id == GUEST:
+        return "test-guest" if windows.in_use(GUEST_LOG) else "other"
     if windows.in_use(TEST_LOG):
         return "test"
     if windows.in_use(PLAYER_LOG):
@@ -84,14 +116,22 @@ def minecraft_client() -> str:
     return "other"
 
 
+def minecraft_client(link: str | None = None) -> str:
+    """client_on the link with this id, HALFCRAFT_LINK's when None."""
+    return client_on(this_link(protocol.load(), link))
+
+
 def ensure_game_stopped() -> None:
     if running := engines.running():
         raise ToolError(f"{running[1].name} runs: quit it first (it writes save\\ and cfg\\config.cfg)")
 
 
-def ensure_minecraft_stopped(why: str) -> None:
-    if (client := minecraft_client()) != "none":
-        raise ToolError(f"the {client} minecraft runs: {why}")
+def ensure_minecraft_stopped(why: str, link: str | None = None, *, any_link: bool = False) -> None:
+    """a ToolError saying why when a minecraft runs on the link with this id (HALFCRAFT_LINK's when None), or on any
+    of the test_links with any_link."""
+    for names in test_links() if any_link else [this_link(protocol.load(), link)]:
+        if (client := client_on(names)) != "none":
+            raise ToolError(f"the {client} minecraft runs on {described(names)}: {why}")
 
 
 def with_session(sessions: list[Session], on: bool) -> list[str]:
@@ -101,7 +141,7 @@ def with_session(sessions: list[Session], on: bool) -> list[str]:
 
 def start(sessions: list[Session]) -> None:
     ensure_game_stopped()
-    ensure_minecraft_stopped("its world would follow the test's loads. quit it, start the session, then the test client (make mc-test)")
+    ensure_minecraft_stopped("its world would follow the test's loads. quit it, start the session, then the test client (make mc-test)", any_link=True)
     todo = []
     for session in sessions:
         if not session.engine.game.is_dir():
@@ -124,7 +164,7 @@ def start(sessions: list[Session]) -> None:
 
 def stop(sessions: list[Session]) -> None:
     ensure_game_stopped()
-    ensure_minecraft_stopped("quit it first: with the player's saves back, its world would play against them")
+    ensure_minecraft_stopped("quit it first: with the player's saves back, its world would play against them", any_link=True)
     for session in sessions:
         name = session.engine.name
         if not session.keep.is_dir():
@@ -158,14 +198,22 @@ def status(sessions: list[Session]) -> None:
         print(f"{session.engine.name}: test session on since {session.since()}" if session.keep.is_dir() else f"{session.engine.name}: no test session")
     running = engines.running()
     print(f"half-life: {f'{running[1].name} runs' if running else 'not running'}")
-    print(f"minecraft: {minecraft_client()}")
+    for names in test_links():
+        print(f"minecraft: {client_on(names)} on {described(names)}")
 
 
-def test_client(sessions: list[Session]) -> None:
-    ensure_minecraft_stopped("two would fight over the one link")
+def test_client(sessions: list[Session], link: str | None = None) -> None:
+    """make mc-test's client (runTestClient) on HALFCRAFT_LINK's link, or with link guest the guest pair's
+    (runTestGuestClient), which is on link guest whatever HALFCRAFT_LINK says (minecraft\\build.gradle)."""
+    if link is not None and link != GUEST:
+        raise ToolError(f"--link {link!r}: only {GUEST} has a minecraft test client of its own (runTestGuestClient)")
+    task, log = ("runTestClient", TEST_LOG) if link is None else ("runTestGuestClient", GUEST_LOG)
+    ensure_minecraft_stopped("two would fight over the one link", link)
+    if windows.in_use(log):  # one on another link, from the same run folder: two can't hold one world
+        raise ToolError(f"another minecraft plays from {log.parent.parent}: quit it first")
     if missing := with_session(sessions, on=False):
         raise ToolError(f"no test session for {', '.join(missing)}: the test world would autosave over the player's saves. make test-start first")
-    gradle.run(["runTestClient"])
+    gradle.run([task])
 
 
 def dev_client(sessions: list[Session]) -> None:
@@ -182,8 +230,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="keep test sessions away from the player's own games")
     parser.add_argument("action", choices=list(ACTIONS))
     parser.add_argument("--engine", choices=["all", *engines.ENGINES], default="all")
+    parser.add_argument("--link", help=f"minecraft only: {GUEST}, the second pair's client")
     options = parser.parse_args()
-    ACTIONS[options.action]([Session(engine) for engine in engines.chosen(options.engine)])
+    sessions = [Session(engine) for engine in engines.chosen(options.engine)]
+    if options.action == "minecraft":
+        test_client(sessions, options.link)
+    elif options.link is not None:
+        raise ToolError(f"--link is for minecraft only: {options.action} covers every link")
+    else:
+        ACTIONS[options.action](sessions)
 
 
 if __name__ == "__main__":

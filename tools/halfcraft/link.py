@@ -39,6 +39,10 @@ def valid_link_id(link_id: str) -> bool:
     return _LINK_ID.fullmatch(link_id) is not None
 
 
+def _bad_id(link_id: str) -> ToolError:
+    return ToolError(f"{link_id!r} isn't a link id (1 to {MAX_LINK_ID} of A-Z, a-z, 0-9, _ and -): give a good one, or none for the default link")
+
+
 def link_names(default_mapping: str, link_id: str | None) -> LinkNames:
     """the names of the link with this id ("" or None: the default link). a ToolError for an id that isn't one,
     never the default link's names: those are another pair's.
@@ -46,9 +50,20 @@ def link_names(default_mapping: str, link_id: str | None) -> LinkNames:
     if not link_id:
         return LinkNames("", default_mapping, f"{default_mapping}_frame", f"{default_mapping}_minecraft")
     if not valid_link_id(link_id):
-        raise ToolError(f"{link_id!r} isn't a link id (1 to {MAX_LINK_ID} of A-Z, a-z, 0-9, _ and -): give a good one, or none for the default link")
+        raise _bad_id(link_id)
     mapping = f"{default_mapping}.{link_id}"
     return LinkNames(link_id, mapping, f"{mapping}_frame", f"{mapping}_minecraft")
+
+
+def file_tag(link_id: str) -> str:
+    """the link's id as it goes into file names (console-<tag>.log, hl2-<tag>.pid). ids are case-sensitive in the
+    kernel's names (b and B are two links) and ntfs's file names aren't, so no two ids give tags that differ in case
+    alone: lowercase letters, digits, _ and - stay as they are, and an uppercase letter is ~ and its lowercase (an id
+    has no ~). guest stays guest, B is ~b. a ToolError for "" (the default link has no tag: its files keep their
+    plain names) or anything else that isn't an id."""
+    if not valid_link_id(link_id):
+        raise _bad_id(link_id)
+    return "".join(f"~{character.lower()}" if character.isupper() else character for character in link_id)
 
 
 def this_link(schema: Schema, link_id: str | None = None) -> LinkNames:

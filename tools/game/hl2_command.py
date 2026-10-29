@@ -1,9 +1,14 @@
 """sends console commands to the running game (make run, either engine), one after another:
 
 python tools/game/hl2_command.py "save test" "hc_look 75 0" "hc_click 3" "load test"
+python tools/game/hl2_command.py --link guest "connect 192.168.1.5"     the copy make run started on link guest
 
-each command goes through a cfg file and +exec over -hijack (-hijack alone drops some arguments). output lands
-in the game's console.log. useful where typing into the console isn't (synthetic keys, keyboard layouts).
+a game make run started (its pid in the game folder: hl2.pid, or hl2-<tag>.pid on a link, tools/halfcraft/engines.py)
+gets each command typed into its console (windows.send_console: WM_COPYDATA to that pid's window), from either
+desktop: this one or tools/game/hidden_desktop.py's. any other game on the default link (HalfCraft.exe's, one started
+by hand) gets it through a cfg file and +exec over -hijack (-hijack alone drops some arguments), which reaches a
+game on its own desktop only and can't tell two copies apart. output lands in the copy's console log (console.log,
+or console-<tag>.log on a link). useful where typing into the console isn't (synthetic keys, keyboard layouts).
 """
 
 import argparse
@@ -19,6 +24,8 @@ from halfcraft import ToolError, commands, engines, windows
 SECONDS = 15
 # the game takes the handed-over command a moment after the hand-over ends
 SETTLE_SECONDS = 1.5
+# between two commands typed into a copy's console
+TYPED_SECONDS = 0.2
 
 
 def leftovers(exe: Path, game: windows.Process, since: int) -> list[windows.Process]:
@@ -52,15 +59,15 @@ def send(engine: engines.Engine, exe: Path, game: windows.Process, command: str)
         commands.kill_tree(other.pid)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="send console commands to the running game")
-    parser.add_argument("commands", nargs="+", metavar="command")
-    options = parser.parse_args()
-
-    running = engines.running()
-    if not running:
-        raise ToolError("the game isn't running (make run)")
-    engine, game = running
+def hijack(command_list: list[str]) -> None:
+    """the commands through -hijack, to the game on the default link that make run didn't start, when it runs alone."""
+    unrecorded = engines.unrecorded_games()
+    if not unrecorded:
+        raise ToolError("the game isn't running on the default link (make run)")
+    if len(running := engines.games()) > 1:
+        pids = ", ".join(str(game.pid) for _, game in running)
+        raise ToolError(f"{len(running)} games run ({pids}), and make run didn't start the default link's: -hijack can't tell them apart")
+    engine, game = unrecorded[0]
     # -hijack finds the game's window only on its own desktop: from the other one the hand-over would start a second
     # game there, with its "only one instance" box, and the command would never arrive
     hidden = any(pid == game.pid for _, pid in windows.windows_on_hidden_desktop())
@@ -70,9 +77,28 @@ def main() -> None:
     if sent_from_hidden and not hidden:
         raise ToolError("the game runs on your desktop: use plain make cmd (or tools/game/hl2_command.py) without tools/game/hidden_desktop.py")
     exe = engine.find_exe()
-    for command in options.commands:
+    for command in command_list:
         send(engine, exe, game, command)
         print(f"sent: {command}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="send console commands to the running game")
+    parser.add_argument("--link", help="the link id of the copy make run started (none: the default link's)")
+    parser.add_argument("commands", nargs="+", metavar="command")
+    options = parser.parse_args()
+
+    if found := engines.game_on_link(options.link):
+        pid = found[1]
+        for index, command in enumerate(options.commands):
+            if index:
+                time.sleep(TYPED_SECONDS)
+            windows.send_console(pid, command)
+            print(f"sent: {command}")
+        return
+    if options.link is not None:
+        raise ToolError(f"no game make run started on link {options.link} runs (make run LINK={options.link})")
+    hijack(options.commands)
 
 
 if __name__ == "__main__":

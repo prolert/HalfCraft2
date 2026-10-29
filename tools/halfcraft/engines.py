@@ -1,7 +1,11 @@
-"""the two engines halfcraft runs on, and what they need.
+"""the two engines halfcraft runs on, what they need, and which of their games run.
 
 hl2    half-life 2's own engine: 32-bit hl2.exe (app 220), dlls from source-sdk-2013-sp
 hl2dm  half-life 2: deathmatch's: 64-bit hl2mp_win64.exe (app 320), dlls from source-sdk-2013
+
+make run (tools/game/run_hl2.py) writes the pid of each game it starts into the game folder: hl2.pid on the default
+link, hl2-<tag>.pid on a link of its own (link.file_tag), so a tool reaches one of two copies (a co-op test's host and
+guest) by its link.
 """
 
 import re
@@ -10,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from halfcraft import REPO, ToolError, windows
+from halfcraft.link import file_tag
 
 
 @dataclass(frozen=True)
@@ -64,19 +69,79 @@ def chosen(engine: str) -> list[Engine]:
     return list(ENGINES.values()) if engine == "all" else [ENGINES[engine]]
 
 
-def running() -> tuple[Engine, windows.Process] | None:
-    """the running game and its engine, or None: the oldest process of a steam install of one of the engines. another
-    project's hl2.exe (a private-engine build, from some other folder) isn't one: it doesn't load halfcraft's dlls or
-    write its saves, and these tools must never touch it.
-    """
-    installed = {}
+def installed() -> dict[Engine, Path]:
+    """the engines a steam library has, with their exes."""
+    found = {}
     for engine in ENGINES.values():
         try:
-            installed[engine.exe.lower()] = engine, engine.find_exe()
+            found[engine] = engine.find_exe()
         except ToolError:
             continue  # not installed, so it isn't running either
-    for process in windows.processes(*installed):  # oldest first
-        engine, exe = installed[process.name.lower()]
+    return found
+
+
+def games() -> list[tuple[Engine, windows.Process]]:
+    """the running games and their engines, oldest first: the processes of a steam install of one of the engines.
+    another project's hl2.exe (a private-engine build, from some other folder) isn't one: it doesn't load halfcraft's
+    dlls or write its saves, and these tools must never touch it.
+    """
+    exes = {engine.exe.lower(): (engine, exe) for engine, exe in installed().items()}
+    found = []
+    for process in windows.processes(*exes):  # oldest first
+        engine, exe = exes[process.name.lower()]
         if windows.runs_exe(process.pid, exe):
-            return engine, process
+            found.append((engine, process))
+    return found
+
+
+def running() -> tuple[Engine, windows.Process] | None:
+    """the running game and its engine (the oldest one, when two copies run), or None."""
+    return next(iter(games()), None)
+
+
+def pid_file(engine: Engine, link: str | None) -> Path:
+    """where make run writes the pid of the engine's game it starts on the link with this id: hl2.pid in the game
+    folder for None (the default link), hl2-<tag>.pid for an id. a ToolError for "" or anything else that isn't an id:
+    only None is the default link."""
+    return engine.game / ("hl2.pid" if link is None else f"hl2-{file_tag(link)}.pid")
+
+
+def live_pid(pid_file: Path, exe: Path) -> int | None:
+    """the pid in the file when it is a live process of this very exe that started before the file was written (so not
+    a pid windows has given to another copy since), else None: no file, no number in it, a dead pid, another exe."""
+    try:
+        text = pid_file.read_text(encoding="ascii").strip()
+        written = pid_file.stat().st_mtime_ns // 100 + windows.UNIX_EPOCH_TICKS
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.isdigit():
+        return None
+    pid = int(text)
+    if not windows.runs_exe(pid, exe):  # also False for one that has exited
+        return None
+    started = windows.started(pid)
+    return pid if started is not None and started <= written else None
+
+
+def game_pid(engine: Engine, link: str | None) -> int | None:
+    """the pid of the engine's game make run started on this link, while it runs (live_pid)."""
+    return live_pid(pid_file(engine, link), engine.find_exe())
+
+
+def game_on_link(link: str | None) -> tuple[Engine, int] | None:
+    """the game make run started on this link that still runs, of either engine (a link's names are the same for
+    both): its engine and pid, or None."""
+    if link is not None:
+        file_tag(link)  # a ToolError for a bad id, even with no engine installed
+    for engine, exe in installed().items():
+        if pid := live_pid(pid_file(engine, link), exe):
+            return engine, pid
     return None
+
+
+def unrecorded_games() -> list[tuple[Engine, windows.Process]]:
+    """the running games no pid file of make run's names (HalfCraft.exe's, a player's, one started by hand): they
+    are on the default link, as far as these tools can tell."""
+    exes = installed()
+    recorded = {pid for engine, exe in exes.items() for file in engine.game.glob("hl2*.pid") if (pid := live_pid(file, exe))}
+    return [(engine, process) for engine, process in games() if process.pid not in recorded]

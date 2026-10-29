@@ -7,15 +7,20 @@ check(condition, what) counts a check and, when it fails, says which one and goe
 wrong. each test is a function named for what it holds. exits 0 when every check passes, 1 when one fails.
 """
 
+import importlib.util
 import os
+import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools\, where the halfcraft package is
-from halfcraft import ToolError, link, protocol
+from halfcraft import REPO, ToolError, engines, link, protocol
 
 RESULTS: list[bool] = []
+HL2DM = engines.ENGINES["hl2dm"]
 OTHER_LETTERS = (chr(0xE9), chr(0xFF22), chr(0x431))  # an e with an acute accent, a fullwidth B, a cyrillic b
 
 
@@ -32,6 +37,34 @@ def raises(call: Callable[[], object]) -> bool:
     except ToolError:
         return True
     return False
+
+
+def game_tool(name: str) -> ModuleType:
+    """tools/game/<name>.py imported afresh (its module-level code runs again), without running its main."""
+    spec = importlib.util.spec_from_file_location(name, REPO / f"tools/game/{name}.py")
+    if spec is None or spec.loader is None:
+        raise ToolError(f"no tools/game/{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class LinkVariable:
+    """HALFCRAFT_LINK set to a value (None: unset) for a while, then as it was."""
+
+    def __init__(self, value: str | None) -> None:
+        self.value = value
+        self.saved = os.environ.get(link.LINK_VARIABLE)
+
+    def __enter__(self) -> None:
+        os.environ.pop(link.LINK_VARIABLE, None)
+        if self.value is not None:
+            os.environ[link.LINK_VARIABLE] = self.value
+
+    def __exit__(self, *_: object) -> None:
+        os.environ.pop(link.LINK_VARIABLE, None)
+        if self.saved is not None:
+            os.environ[link.LINK_VARIABLE] = self.saved
 
 
 def test_valid_link_id() -> None:
@@ -79,10 +112,111 @@ def test_this_link() -> None:
             os.environ[link.LINK_VARIABLE] = saved
 
 
+def test_file_tag() -> None:
+    check(link.file_tag("guest") == "guest", "guest's tag is guest")
+    check(link.file_tag("a_Z-9") == "a_~z-9", f"a_Z-9's tag is {link.file_tag('a_Z-9')}")
+    # ids that differ in case alone (two links in the kernel's names) give tags that differ even on ntfs
+    for ids in (("b", "B"), ("ab", "aB", "Ab", "AB")):
+        tags = [link.file_tag(link_id) for link_id in ids]
+        check(len({tag.lower() for tag in tags}) == len(ids), f"{ids}: tags {tags} differ ignoring case")
+        check(all(tag == tag.lower() for tag in tags), f"{ids}: tags {tags} have no uppercase letter")
+    for bad in ("", "b.c", "b c"):
+        check(raises(lambda bad=bad: link.file_tag(bad)), f"{bad!r} has no tag")
+
+
+def test_launch_arguments() -> None:
+    run_hl2 = game_tool("run_hl2")
+
+    def arguments(link_id: str | None) -> list[str]:
+        return run_hl2.launch_arguments(HL2DM, link=link_id, fullscreen=False, width=1280, height=720, map="d1_trainstation_02", extra=["+sv_cheats", "1"])
+
+    def follows(found: list[str], first: str, then: str) -> bool:
+        return any(found[at : at + 2] == [first, then] for at in range(len(found) - 1))
+
+    default = arguments(None)
+    check("-multirun" in default and "-condebug" in default, f"the default link's copy: -multirun and -condebug ({default})")
+    check("-hc_link" not in default and "+con_logfile" not in default, f"the default link's copy: no -hc_link, no +con_logfile ({default})")
+    check(default[-2:] == ["+map", "d1_trainstation_02"] and follows(default, "+sv_cheats", "1"), f"the map last, after the extra arguments ({default})")
+    guest = arguments("guest")
+    check("-multirun" in guest and follows(guest, "-hc_link", "guest"), f"guest's copy: -multirun -hc_link guest ({guest})")
+    check(
+        follows(guest, "+con_logfile", "console-guest.log") and "-condebug" not in guest,
+        f"guest's copy: +con_logfile console-guest.log, no -condebug ({guest})",
+    )
+    check(follows(arguments("B"), "+con_logfile", "console-~b.log"), "B's copy logs to console-~b.log")
+    full = run_hl2.launch_arguments(HL2DM, link=None, fullscreen=True, width=1, height=1, map=None, extra=[])
+    check("-windowed" not in full and "+map" not in full and "-multirun" in full, f"fullscreen, no map: -multirun still ({full})")
+
+
+def test_bad_link_ids_raise() -> None:
+    run_hl2 = game_tool("run_hl2")
+    for bad in ("", "b.c"):
+        check(
+            raises(lambda bad=bad: run_hl2.launch_arguments(HL2DM, link=bad, fullscreen=False, width=1, height=1, map=None, extra=[])),
+            f"launch_arguments refuses {bad!r}",
+        )
+        check(raises(lambda bad=bad: engines.pid_file(HL2DM, bad)), f"pid_file refuses {bad!r}")
+        check(raises(lambda bad=bad: engines.game_pid(HL2DM, bad)), f"game_pid refuses {bad!r}")
+        check(raises(lambda bad=bad: engines.game_on_link(bad)), f"game_on_link refuses {bad!r}")
+
+
+def test_pid_file() -> None:
+    check(engines.pid_file(HL2DM, None) == REPO / "build/game-hl2dm/hl2.pid", f"the default link's: {engines.pid_file(HL2DM, None)}")
+    check(engines.pid_file(HL2DM, "guest") == REPO / "build/game-hl2dm/hl2-guest.pid", f"guest's: {engines.pid_file(HL2DM, 'guest')}")
+    check(engines.pid_file(HL2DM, "B").name == "hl2-~b.pid", f"B's: {engines.pid_file(HL2DM, 'B').name}")
+
+
+def test_live_pid() -> None:
+    python = Path(sys.executable)
+    other_exe = Path(os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe"))
+    with tempfile.TemporaryDirectory() as folder:
+        file = Path(folder) / "hl2.pid"
+        check(engines.live_pid(file, python) is None, "no file: None")
+        file.write_text("not a pid\n", encoding="ascii")
+        check(engines.live_pid(file, python) is None, "no number in the file: None")
+        with subprocess.Popen([sys.executable, "-c", "pass"]) as finished:
+            finished.wait()
+            file.write_text(f"{finished.pid}\n", encoding="ascii")
+            check(engines.live_pid(file, python) is None, "a finished child's pid: None")
+        file.write_text(f"{os.getpid()}\n", encoding="ascii")
+        check(engines.live_pid(file, other_exe) is None, "a live pid of another exe: None")
+        check(engines.live_pid(file, python) == os.getpid(), "this process with its own exe: its pid")
+        # a file written before the process started names another process that had the pid then
+        os.utime(file, ns=(0, 0))
+        check(engines.live_pid(file, python) is None, "a file older than the process: None")
+
+
+def test_session_imports_lazily() -> None:
+    with LinkVariable("b c"):
+        try:
+            test_session = game_tool("test_session")
+        except SystemExit as error:
+            check(False, f"test_session imports with HALFCRAFT_LINK='b c' (it exited: {error})")
+            return
+        check(True, "test_session imports with HALFCRAFT_LINK='b c'")
+        check(raises(lambda: test_session.MINECRAFT_MUTEX), "MINECRAFT_MUTEX with HALFCRAFT_LINK='b c': a ToolError")
+    with LinkVariable("b"):
+        mutex = test_session.MINECRAFT_MUTEX
+        check(mutex == "Local\\HalfCraft_v1.b_minecraft", f"MINECRAFT_MUTEX with HALFCRAFT_LINK=b: {mutex}")
+    with LinkVariable(None):
+        mutex = test_session.MINECRAFT_MUTEX
+        check(mutex == "Local\\HalfCraft_v1_minecraft", f"MINECRAFT_MUTEX with no HALFCRAFT_LINK: {mutex}")
+    # what tools/game/run_minecraft.py imports
+    for name in ("Session", "ensure_minecraft_stopped", "with_session"):
+        check(callable(getattr(test_session, name, None)), f"test_session.{name} is there")
+    check(not hasattr(test_session, "NOT_THERE"), "another name is no attribute")
+
+
 def main() -> int:
     test_valid_link_id()
     test_link_names()
     test_this_link()
+    test_file_tag()
+    test_launch_arguments()
+    test_bad_link_ids_raise()
+    test_pid_file()
+    test_live_pid()
+    test_session_imports_lazily()
     failed = RESULTS.count(False)
     if failed == 0:
         print(f"tool_tests: {len(RESULTS)} checks passed")

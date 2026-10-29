@@ -6,9 +6,9 @@
 #   make build [ENGINE=hl2]        dlls, shaders, dev game folders build\game-<engine>, HalfCraft.exe
 #   make mc                        the minecraft mod's jar
 #   make mc-run                    the minecraft dev client
-#   make mc-test                   the minecraft test client (after test-start): its own run folder and world
-#   make run [ENGINE=hl2] [MAP=d1_canals_01] [ARGS="+sv_cheats 1"]
-#   make cmd C="'save a' 'load a'" console commands into the running game
+#   make mc-test [LINK=guest]      the minecraft test client (after test-start): its own run folder and world
+#   make run [ENGINE=hl2] [MAP=d1_canals_01] [ARGS="+sv_cheats 1"] [LINK=guest] [WAIT=1]
+#   make cmd [LINK=guest] C="'save a' 'load a'"   console commands into the running game (that link's copy)
 #   make test-start [ENGINE=hl2]   set the game's saves and settings aside for tests; make test-stop: back
 #   make patches                   write sdk edits back into source\sdk\halfcraft-<engine>.patch
 #   make proto                     protocol\halfcraft_protocol.h, minecraft's Proto.java and ProtoStructs.java from protocol\schema
@@ -19,7 +19,9 @@
 #   make core-test                 the c++ core's own tests (tools\debug\core_tests.cpp), then the tools' (tool_tests.py): no game
 #
 # ENGINE: hl2 (half-life 2's own 32-bit engine), hl2dm (half-life 2: deathmatch's 64-bit one) or all
-# (default; `make run` takes hl2dm then). NOPROJECTS=1 skips vpc when no .vpc file changed.
+# (default; `make run` takes hl2dm then). NOPROJECTS=1 skips vpc when no .vpc file changed. LINK=guest: the
+# second pair on one pc for co-op tests (its own link, copy, console-guest.log and minecraft). WAIT=1: make run
+# returns when the game exits (tools/game/hidden_desktop.py keeps its desktop while it waits).
 
 # windows powershell runs the recipes: python calls, with its quoting (make cmd C="'save a' 'load a'")
 SHELL := powershell.exe
@@ -32,9 +34,11 @@ RUN_ENGINE := $(if $(filter all,$(ENGINE)),hl2dm,$(ENGINE))
 MAP ?=
 ARGS ?=
 C ?=
+LINK ?=
+WAIT ?=
 
 help:
-	@Get-Content Makefile | Select-Object -First 23 | ForEach-Object { $$_ -replace '^# ?', '' }
+	@Get-Content Makefile | Select-Object -First 25 | ForEach-Object { $$_ -replace '^# ?', '' }
 
 setup:
 	python tools/build/setup_sdk.py --engine $(ENGINE)
@@ -49,13 +53,13 @@ mc-run:
 	python tools/game/test_session.py dev-client
 
 mc-test:
-	python tools/game/test_session.py minecraft
+	python tools/game/test_session.py minecraft $(if $(LINK),--link $(LINK))
 
 run:
-	python tools/game/run_hl2.py --engine $(RUN_ENGINE) $(if $(MAP),--map $(MAP)) $(if $(ARGS),-- $(ARGS))
+	python tools/game/run_hl2.py --engine $(RUN_ENGINE) $(if $(LINK),--link $(LINK)) $(if $(WAIT),--wait) $(if $(MAP),--map $(MAP)) $(if $(ARGS),-- $(ARGS))
 
 cmd:
-	python tools/game/hl2_command.py -- $(C)
+	python tools/game/hl2_command.py $(if $(LINK),--link $(LINK)) -- $(C)
 
 test-start:
 	python tools/game/test_session.py start --engine $(ENGINE)

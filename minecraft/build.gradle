@@ -25,6 +25,18 @@ loom {
 			vmArgs client.vmArgs
 			vmArg "-Dhalfcraft.world=HalfCraftTest"
 		}
+		// make mc-test LINK=guest (runTestGuestClient): the second pair's client on one pc, for co-op
+		// tests: a run folder, a world, a name and a link of its own (two clients can't hold one world)
+		testGuestClient {
+			inherit client
+			configName = "Minecraft Test Guest Client"
+			runDir "run/test-guest"
+			// its own name: programArgs would add it after the inherited one
+			programArguments.set(["--username", "Gordon2"])
+			vmArgs client.vmArgs
+			vmArg "-Dhalfcraft.world=HalfCraftTestGuest"
+			environmentVariable "HALFCRAFT_LINK", "guest"
+		}
 	}
 
 	mods {

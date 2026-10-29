@@ -170,7 +170,11 @@ yours only outside one. Two pairs (a Half-Life and its Minecraft) run on one PC 
 Half-Life's command line, which wins over it and goes on to the Minecraft that Half-Life or `HalfCraft.exe`
 starts; the mapping is then `Local\HalfCraft_v1.<id>` (`source/src/core/hc_link_names.h`), and the tools read
 `HALFCRAFT_LINK` too. Without an id nothing changes; an id that isn't one keeps HalfCraft off rather than on
-another pair's link. A second Source game on the PC needs `-multirun`. In the game, `hc_mc <command>` runs a Minecraft command as the player (the
+another pair's link. A second Source game on the PC needs `-multirun`, which `make run` always passes. For co-op
+tests the second pair is `LINK=guest`: `make mc-test LINK=guest` starts its Minecraft (`Gordon2`, with
+`minecraft/run/test-guest` and the world `HalfCraftTestGuest`) and `make run LINK=guest` its Half-Life
+(`-hc_link guest`, logging to `console-guest.log`), and `make cmd LINK=guest` and `wait_log.py hl2dm-guest` or
+`mc-test-guest` reach that pair. In the game, `hc_mc <command>` runs a Minecraft command as the player (the
 answer goes to chat and to Minecraft's log). For scripts (`tools/game/hl2_command.py`; typed into the
 console they're let go as it closes), `hc_key <SDL scancode> [1|0] [seconds]`,
 `hc_hold <mouse button> <1|0> [seconds]` and `hc_use <1|0> [seconds]` press Minecraft's keys and
@@ -178,11 +182,13 @@ buttons and Source's use, and `tools/game/wait_log.py` waits for a line in eithe
 
 `python tools/game/hidden_desktop.py <command>` runs a command on a Windows desktop of its own that nobody sees
 (`HalfCraftTest`), so a test's games take neither the screen nor the keyboard and mouse: both games draw there
-(Half-Life's d3d9, Minecraft's opengl), link up, and `jpeg` writes what Half-Life drew. Start both through it, and
-send commands through it too (`-hijack` only finds the game's window on its own desktop):
+(Half-Life's d3d9, Minecraft's opengl), link up, and `jpeg` writes what Half-Life drew. Start both through it:
 `python tools/game/hidden_desktop.py make mc-test` (in the background), then
-`python tools/game/hidden_desktop.py make run MAP=d2_coast_03` and
-`python tools/game/hidden_desktop.py make cmd C="'jpeg a 90'"` (`make cmd` alone refuses while the game runs there).
+`python tools/game/hidden_desktop.py make run MAP=d2_coast_03 WAIT=1` (in the background too: `WAIT=1` holds the
+desktop for the game, which dies there when nothing does), and send commands with plain
+`make cmd C="'jpeg a 90'"`: it reaches a game `make run` started on either desktop, by the pid it wrote down (a
+game started any other way gets them over `-hijack`, which finds its window on its own desktop only, so send those
+through `hidden_desktop.py`).
 `--list` prints the processes with a window there, their exes and the titles of their visible windows: a process
 stuck there on a box nobody can click (an error, "only one instance") shows up so, and `taskkill /F /PID <pid>` ends it.
 `taskkill /PID` without `/F` doesn't reach the test client's hidden window there: `--close <pid>` asks it to close

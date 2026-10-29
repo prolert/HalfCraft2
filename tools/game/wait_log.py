@@ -6,10 +6,11 @@ python tools/game/hl2_command.py "hc_mc kill @s"
 python tools/game/wait_log.py hl2dm --after "$mark" --pattern "so does gordon" --timeout 20
 python tools/game/wait_log.py mc-test --after "$mark" --pattern "teleported" --absent --timeout 5
 
-the log: hl2 or hl2dm (build\\game-<engine>\\console.log), mc (minecraft\\run, the player's dev client), mc-test
-(minecraft\\run\\test, make mc-test's) or a file's path. --pattern is a python regex. lines before --after don't
-count; without it only lines written after this starts do, which can miss a line the command before already
-caused: take a --mark first. prints the line it found and exits 0; exits 1 when the timeout passes without
+the log: hl2 or hl2dm (build\\game-<engine>\\console.log), hl2-guest or hl2dm-guest (console-guest.log there, make
+run LINK=guest's copy's), mc (minecraft\\run, the player's dev client), mc-test (minecraft\\run\\test, make
+mc-test's), mc-test-guest (minecraft\\run\\test-guest, make mc-test LINK=guest's) or a file's path. --pattern is a
+python regex. lines before --after don't count; without it only lines written after this starts do, which can miss
+a line the command before already caused: take a --mark first. prints the line it found and exits 0; exits 1 when the timeout passes without
 one. --absent turns it round: 0 when no line matched in time.
 """
 
@@ -24,8 +25,11 @@ from halfcraft import REPO, ToolError, engines, windows
 
 LOGS = {
     **{name: engine.game / "console.log" for name, engine in engines.ENGINES.items()},
+    # the guest copy's of a co-op test (make run LINK=guest, tools/game/run_hl2.py)
+    **{f"{name}-guest": engine.game / "console-guest.log" for name, engine in engines.ENGINES.items()},
     "mc": REPO / "minecraft/run/logs/latest.log",
     "mc-test": REPO / "minecraft/run/test/logs/latest.log",
+    "mc-test-guest": REPO / "minecraft/run/test-guest/logs/latest.log",
 }
 POLL_SECONDS = 0.25
 
@@ -61,7 +65,7 @@ def wait(path: Path, pattern: re.Pattern[str], after: int, timeout: float) -> st
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="wait for a line in a game's log")
-    parser.add_argument("log", help="hl2, hl2dm, mc, mc-test or a file's path")
+    parser.add_argument("log", help="hl2, hl2dm, hl2-guest, hl2dm-guest, mc, mc-test, mc-test-guest or a file's path")
     parser.add_argument("--pattern", help="a python regex")
     parser.add_argument("--timeout", type=float, default=30, help="seconds")
     parser.add_argument("--after", type=int, default=-1, help="a byte offset from --mark")
