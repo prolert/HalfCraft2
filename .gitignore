@@ -26,3 +26,6 @@ minecraft/logs/
 # python
 __pycache__/
 *.pyc
+
+# design specs and plans, kept on the developer's machine only
+/docs/superpowers/

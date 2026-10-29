@@ -1,95 +1,112 @@
-# Координатор: исполнение плана копания
+# Coordinator: running the digging plan
 
-Как ведётся исполнение плана
-[`docs/superpowers/plans/2026-10-17-dig-through-walls.md`](docs/superpowers/plans/2026-10-17-dig-through-walls.md)
-(спецификация — [`docs/superpowers/specs/2026-10-17-dig-through-walls-design.md`](docs/superpowers/specs/2026-10-17-dig-through-walls-design.md)).
-Процесс — `superpowers:subagent-driven-development`: свежий исполнитель на задачу, ревьюер после каждой,
-итоговое ревью всей ветки в конце. Координатор (главная сессия) сам код не пишет и не правит: только
-раздаёт задачи, решает спорное и ведёт журнал.
+How the plan for digging through Half-Life's walls was carried out. The plan and its spec
+(`docs/superpowers/plans/2026-10-17-dig-through-walls.md`, `docs/superpowers/specs/2026-10-17-dig-through-walls-design.md`)
+are kept locally and aren't in the repository.
 
-## Где что лежит
+The process is `superpowers:subagent-driven-development`:
+- a fresh implementer for each task;
+- a reviewer after each task;
+- a final review of the whole branch at the end.
 
-| Что | Где |
+The coordinator (the main session) writes and edits no code. It hands out tasks, settles disputes and keeps the log.
+
+## Where things are
+
+| What | Where |
 |---|---|
-| Журнал прогресса и решений (`Ruling: …`) | `.superpowers/sdd/2026-10-17-dig-through-walls/progress.md` |
-| Предполётная проверка плана | `.superpowers/sdd/2026-10-17-dig-through-walls/preflight.md` |
-| Бриф задачи N (её текст из плана) | `.superpowers/sdd/2026-10-17-dig-through-walls/task-N-brief.md` |
-| Отчёт исполнителя задачи N | `.superpowers/sdd/2026-10-17-dig-through-walls/task-N-report.md` |
-| Пакеты для ревью (диффы) | `.superpowers/sdd/2026-10-17-dig-through-walls/review-<base>..<head>.diff` |
+| Progress and decision log (`Ruling: …`) | `.superpowers/sdd/2026-10-17-dig-through-walls/progress.md` |
+| Pre-flight check of the plan | `.superpowers/sdd/2026-10-17-dig-through-walls/preflight.md` |
+| Brief for task N (its text from the plan) | `.superpowers/sdd/2026-10-17-dig-through-walls/task-N-brief.md` |
+| Implementer's report for task N | `.superpowers/sdd/2026-10-17-dig-through-walls/task-N-report.md` |
+| Review packages (diffs) | `.superpowers/sdd/2026-10-17-dig-through-walls/review-<base>..<head>.diff` |
 
-Папка `.superpowers/sdd/` в git не попадает. Ветка — `dig-prototype`, только локально: без push и PR.
-`dig-spike` — выбрасываемая ветка задачи 1, не сливается.
+The `.superpowers/sdd/` folder isn't committed.
 
-## Модели
+## Models
 
-Сложные задачи — **Opus 5.5** (`opus`), лёгкие — **Sonnet 5.5** (`sonnet`) или **Fable 5.1** (`fable`).
-Модель указывается явно при каждом запуске агента: без неё агент берёт модель главной сессии.
+Name the model explicitly every time an agent is started. Without it, the agent takes the main session's model.
 
-| Роль | Модель |
+- Hard tasks go to **Opus 5.5** (`opus`).
+- Easy tasks go to **Sonnet 5.5** (`sonnet`) or **Fable 5.1** (`fable`).
+
+| Role | Model |
 |---|---|
-| Исполнитель сложной задачи | Opus 5.5 |
-| Исполнитель лёгкой задачи | Sonnet 5.5 |
-| Ревью сложной задачи | Opus 5.5 |
-| Ревью лёгкой задачи | Sonnet 5.5 |
-| Повторное ревью после правок (только правки и находки) | Fable 5.1 (маленький дифф) или Sonnet 5.5 |
-| Правки, раунды 1–3 | та же модель, что у исполнителя задачи |
-| Правки, раунды 4–5 (эскалация) | Opus 5.5 |
-| Предполётная проверка, итоговое ревью всей ветки | Opus 5.5 |
-| Механика (сбор диффов, проверка журнала, короткие справки) | Fable 5.1 |
+| Implementer, hard task | Opus 5.5 |
+| Implementer, easy task | Sonnet 5.5 |
+| Review, hard task | Opus 5.5 |
+| Review, easy task | Sonnet 5.5 |
+| Re-review after fixes (only the fixes and the findings) | Fable 5.1 (small diff) or Sonnet 5.5 |
+| Fixes, rounds 1–3 | the task implementer's model |
+| Fixes, rounds 4–5 (escalation) | Opus 5.5 |
+| Pre-flight check, final review of the whole branch | Opus 5.5 |
+| Mechanics (collecting diffs, checking the log, short lookups) | Fable 5.1 |
 
-**Сложная** задача — правит движковый код (server.dll, client.dll, патчи SDK, шейдеры), Fabric-миксины и
-жизненный цикл мира Minecraft, или запускает игры для проверки. **Лёгкая** — чистый код с юнит-тестами по
-готовым сигнатурам или правка схемы.
+A **hard** task does at least one of these:
+- edits engine code (server.dll, client.dll, SDK patches, shaders);
+- edits Fabric mixins or the Minecraft world's lifecycle;
+- runs the games to check its work.
 
-| Задача | Что | Класс | Исполнитель | Ревьюер |
+An **easy** task is plain code with unit tests against given signatures, or a schema change.
+
+| Task | What | Class | Implementer | Reviewer |
 |---|---|---|---|---|
-| 1 | Окружение и проверка шейдерного пути (spike) | сложная | Opus 5.5 | Opus 5.5 |
-| 2 | Ядро C++: тесты и вырезание кубов из брашей | лёгкая | Sonnet 5.5 | Sonnet 5.5 |
-| 3 | Ядро C++: дерево BSP, пустота, раскладка маски | лёгкая | Sonnet 5.5 | Sonnet 5.5 |
-| 4 | Протокол | лёгкая | Sonnet 5.5 | Sonnet 5.5 |
-| 5 | server.dll: дерево BSP карты и пустота в потоке | сложная | Opus 5.5 | Opus 5.5 |
-| 6 | server.dll: материалы брашей и флаг копания | сложная | Opus 5.5 | Opus 5.5 |
-| 7 | Мост дыр и вырезание коллизии | сложная | Opus 5.5 | Opus 5.5 |
-| 8 | Видимость сквозь дыры (PVS, `r_novis`) | сложная | Opus 5.5 | Opus 5.5 |
-| 9 | Шейдерная DLL и маска дыр | сложная | Opus 5.5 | Opus 5.5 |
-| 10 | Minecraft: связь с Half-Life для копания | лёгкая | Sonnet 5.5 | Sonnet 5.5 |
-| 11 | Minecraft: хранение выкопанного и вскрытие | сложная | Opus 5.5 | Opus 5.5 |
-| 12 | Minecraft клиент: ломание стен Half-Life | сложная | Opus 5.5 | Opus 5.5 |
-| 13 | Minecraft клиент: стенки дыры и `kRenDug` | сложная | Opus 5.5 | Opus 5.5 |
-| 14 | Проверка в игре | сложная | Opus 5.5 | Opus 5.5 |
+| 1 | Environment and the shader path check (spike) | hard | Opus 5.5 | Opus 5.5 |
+| 2 | C++ core: tests and cutting cubes out of brushes | easy | Sonnet 5.5 | Sonnet 5.5 |
+| 3 | C++ core: BSP tree, void, mask layout | easy | Sonnet 5.5 | Sonnet 5.5 |
+| 4 | Protocol | easy | Sonnet 5.5 | Sonnet 5.5 |
+| 5 | server.dll: the map's BSP tree and the void in the stream | hard | Opus 5.5 | Opus 5.5 |
+| 6 | server.dll: brush materials and the dig flag | hard | Opus 5.5 | Opus 5.5 |
+| 7 | The hole bridge and cutting collision | hard | Opus 5.5 | Opus 5.5 |
+| 8 | Visibility through holes (PVS, `r_novis`) | hard | Opus 5.5 | Opus 5.5 |
+| 9 | The shader DLL and the hole mask | hard | Opus 5.5 | Opus 5.5 |
+| 10 | Minecraft: the link to Half-Life for digging | easy | Sonnet 5.5 | Sonnet 5.5 |
+| 11 | Minecraft: storing dug cells and revealing | hard | Opus 5.5 | Opus 5.5 |
+| 12 | Minecraft client: breaking Half-Life's walls | hard | Opus 5.5 | Opus 5.5 |
+| 13 | Minecraft client: hole walls and `kRenDug` | hard | Opus 5.5 | Opus 5.5 |
+| 14 | In-game check | hard | Opus 5.5 | Opus 5.5 |
 
-Лёгкая задача, исполнитель которой вернул `BLOCKED` или застрял на правках, переходит на Opus 5.5.
+An easy task whose implementer returned `BLOCKED` or got stuck on fixes moves to Opus 5.5.
 
-## Цикл одной задачи
+## One task's cycle
 
-1. Записать BASE (`git rev-parse HEAD`) и строку `Task N: dispatched` в журнал.
-2. **Исполнитель** читает только бриф, шапку плана (Global Constraints) и решения из запуска; пишет
-   полный отчёт в `task-N-report.md`, коммитит, отвечает коротко: статус, коммиты, тесты, сомнения.
-   Субагентов не запускает.
-3. **Ревьюер** собирает дифф `BASE..HEAD` скриптом `review-package`, даёт два вердикта: соответствие брифу и
-   качество (Critical / Important / Minor) и пункты «не проверить по диффу».
-4. **Правки**: Critical и Important — до 5 раундов, каждый с повторным ревью только правок. Minor уходят в
-   журнал как отложенные, их разбирает итоговое ревью. Находка, которая спорит с текстом плана, сначала
-   получает решение координатора (`Ruling:` в журнале).
-5. После 5 раундов открытые находки координатор разбирает сам: оставить с решением или исправить
-   минимально то, на что опираются следующие задачи.
-6. `Task N: complete (commits <base>..<head>, review clean | K parked)` в журнал, затем следующая задача.
+1. Record BASE (`git rev-parse HEAD`) and a `Task N: dispatched` line in the log.
+2. **The implementer:**
+   - reads only the brief, the plan's header (Global Constraints) and the decisions passed at dispatch;
+   - writes a full report to `task-N-report.md` and commits;
+   - answers briefly: status, commits, tests, doubts.
 
-Задачи идут строго по одной, по порядку 1–14: одна рабочая копия, одна тестовая сессия, `make format`,
-`make lint` и `make build` трогают всё сразу. Каждую задачу координатор запускает отдельным workflow
-(исполнитель → ревью → правки), чтобы между задачами принимать решения самому.
+   It starts no subagents.
+3. **The reviewer** builds the `BASE..HEAD` diff with the `review-package` script. It gives two verdicts, brief
+   compliance and quality (Critical / Important / Minor), plus a list of what can't be checked from the diff.
+4. **Fixes:**
+   - Critical and Important findings get up to 5 rounds, each followed by a re-review of the fixes only.
+   - Minor findings go into the log as parked, and the final review deals with them.
+   - A finding that disputes the plan's text first gets a coordinator decision (`Ruling:` in the log).
+5. After 5 rounds the coordinator settles the open findings itself: it either keeps a finding with a ruling or
+   makes the minimal fix that the following tasks depend on.
+6. Write `Task N: complete (commits <base>..<head>, review clean | K parked)` in the log, then start the next task.
 
-## Когда останавливаться
+Tasks run strictly one at a time, in order 1–14. There is one working copy and one test session, and
+`make format`, `make lint` and `make build` touch everything at once. The coordinator starts each task as its own
+workflow (implementer → review → fixes), so that it makes the decisions between tasks itself.
 
-Только в четырёх случаях: необратимое или разрушительное действие; что-то, связанное с безопасностью;
-действие за пределами этой рабочей копии, о котором принято спрашивать (merge, push, публикация); план
-сломан так, что любой путь дальше — догадка. Всё остальное координатор решает сам и записывает решение в
-журнал с ценой ошибки. Отдельно: если задача 1 показала, что ни один вариант шейдера не работает,
-задачи 2–14 не начинаются.
+## When to stop
 
-## Если всё оборвалось
+Stop in four cases only:
+- an irreversible or destructive action;
+- anything security-related;
+- an action outside this working copy that you normally ask about (merge, push, publishing);
+- a plan so broken that every way forward is a guess.
 
-Сбой, лимит или сжатие контекста: верить журналу и `git log`, а не памяти. Задачи со строкой
-`Task N: complete` не перезапускать. Задачу, оборванную на середине, продолжить (агента — через
-SendMessage, если он жив, иначе свежего исполнителя с брифом и отчётом). Запущенные игры и тестовую
-сессию закрыть процедурой из шапки плана, прежде чем собирать заново.
+The coordinator decides everything else itself and records the decision in the log with the cost of being wrong.
+One special case: if task 1 shows that no shader variant works, tasks 2–14 don't start.
+
+## If everything broke off
+
+After a crash, a limit or a context compaction, trust the log and `git log`, not memory.
+
+- Don't rerun a task that has a `Task N: complete` line.
+- Continue a task that broke off midway: through SendMessage if its agent is still alive, otherwise with a fresh
+  implementer given the brief and the report.
+- Close any running games and the test session with the procedure from the plan's header before building again.
