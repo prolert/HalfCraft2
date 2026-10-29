@@ -168,6 +168,30 @@ index 8daa9f65..a005ffb5 100644
  		view->UpdateShadowDepthTexture( m_DummyColorTexture, shadowDepthTexture, shadowView );
  
  		// Associate the shadow depth texture and stencil bit with the flashlight for use during scene rendering
+diff --git a/src/game/client/history_resource.cpp b/src/game/client/history_resource.cpp
+index c0743b41..69148bf8 100644
+--- a/src/game/client/history_resource.cpp
++++ b/src/game/client/history_resource.cpp
+@@ -13,6 +13,8 @@
+ #include "iclientmode.h"
+ #include "vgui_controls/AnimationController.h"
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -165,6 +167,10 @@ void CHudHistoryResource::AddToHistory( int iType, const char *szName, int iCoun
+ //-----------------------------------------------------------------------------
+ void CHudHistoryResource::AddIconToHistory( int iType, int iId, C_BaseCombatWeapon *weapon, int iCount, CHudTexture *icon )
+ {
++	// halfcraft: minecraft shows it as a toast instead, while its hud is up
++	if ( halfcraft::client_pickup( iType, iId, weapon, iCount, icon ) )
++		return;
++
+ 	m_bNeedsDraw = true;
+ 
+ 	// Check to see if the pic would have to be drawn too high. If so, start again from the bottom
 diff --git a/src/game/client/hl2/hud_credits.cpp b/src/game/client/hl2/hud_credits.cpp
 index 6ad1488b..139908a1 100644
 --- a/src/game/client/hl2/hud_credits.cpp
@@ -192,6 +216,61 @@ index 6ad1488b..139908a1 100644
  	{
  		pKV->deleteThis();
  
+diff --git a/src/game/client/hud_closecaption.cpp b/src/game/client/hud_closecaption.cpp
+index 311cd4c0..0b17ae3a 100644
+--- a/src/game/client/hud_closecaption.cpp
++++ b/src/game/client/hud_closecaption.cpp
+@@ -23,6 +23,8 @@
+ #include "datacache/idatacache.h"
+ #include "SoundEmitterSystem/isoundemittersystembase.h"
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -1497,6 +1499,10 @@ void CHudCloseCaption::Process( const wchar_t *stream, float duration, const cha
+ 		}
+ 	}
+ 
++	// halfcraft: minecraft shows it in its chat or its subtitles instead, while its hud is up
++	if ( valid && halfcraft::client_caption( stream, tokenstream, fromplayer ) )
++		return;
++
+ 	float lifespan = duration + cc_linger_time.GetFloat();
+ 	
+ 	float addedlife = 0.0f;
+diff --git a/src/game/client/hud_hintdisplay.cpp b/src/game/client/hud_hintdisplay.cpp
+index 040ce5bc..37e0ca61 100644
+--- a/src/game/client/hud_hintdisplay.cpp
++++ b/src/game/client/hud_hintdisplay.cpp
+@@ -18,6 +18,8 @@
+ #include "IGameUIFuncs.h"
+ #include "inputsystem/iinputsystem.h"
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -423,7 +425,8 @@ void CHudHintKeyDisplay::ApplySchemeSettings( vgui::IScheme *pScheme )
+ //-----------------------------------------------------------------------------
+ bool CHudHintKeyDisplay::ShouldDraw( void )
+ {
+-	return ( ( GetAlpha() > 0 ) && CHudElement::ShouldDraw() );
++	// halfcraft: minecraft shows it as a toast instead, while its hud is up
++	return halfcraft::client_key_hint_drawn( ( GetAlpha() > 0 ) && CHudElement::ShouldDraw() );
+ }
+ 
+ //-----------------------------------------------------------------------------
+@@ -479,6 +482,7 @@ bool CHudHintKeyDisplay::SetHintText( const char *text )
+ 		g_pVGuiLocalize->ConvertANSIToUnicode(text, wszBuf, sizeof(wszBuf));
+ 		ws = wszBuf;
+ 	}
++	halfcraft::client_key_hint_text( ws );
+ 
+ 	// parse out the text into a label set
+ 	while ( *ws )
 diff --git a/src/game/client/in_mouse.cpp b/src/game/client/in_mouse.cpp
 index 8d503c26..2d47245a 100644
 --- a/src/game/client/in_mouse.cpp
@@ -509,6 +588,29 @@ index a8469d6f..794ad271 100644
  		player->ApplyAbsVelocityImpulse( (1.0 + ( frametime * 0.5 )) * player->GetBaseVelocity() );
  		player->SetBaseVelocity( vec3_origin );
  	}
+diff --git a/src/game/server/sceneentity.cpp b/src/game/server/sceneentity.cpp
+index f5c037e4..9098ce55 100644
+--- a/src/game/server/sceneentity.cpp
++++ b/src/game/server/sceneentity.cpp
+@@ -39,6 +39,8 @@
+ #include "npc_alyx_episodic.h"
+ #endif // HL2_EPISODIC
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -1892,6 +1894,9 @@ void CSceneEntity::DispatchStartSpeak( CChoreoScene *scene, CBaseFlex *actor, CC
+ 						byteflags |= CLOSE_CAPTION_GENDER_FEMALE;
+ 					}
+ 
++					// halfcraft: the client's caption doesn't say who speaks it; minecraft's chat names them
++					halfcraft::server_caption_speaker( lowercase, actor );
++
+ 					// Send caption and duration hint down to client
+ 					UserMessageBegin( filter, "CloseCaption" );
+ 						WRITE_STRING( lowercase );
 diff --git a/src/game/server/server_episodic.vpc b/src/game/server/server_episodic.vpc
 index 0234b27f..89f64293 100644
 --- a/src/game/server/server_episodic.vpc
@@ -535,6 +637,29 @@ index 0fc2e64b..78139395 100644
  
  $Configuration
  {
+diff --git a/src/game/shared/SoundEmitterSystem.cpp b/src/game/shared/SoundEmitterSystem.cpp
+index 2c93c491..62b2d548 100644
+--- a/src/game/shared/SoundEmitterSystem.cpp
++++ b/src/game/shared/SoundEmitterSystem.cpp
+@@ -35,6 +35,8 @@
+ #define CRecipientFilter C_RecipientFilter
+ #endif
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -716,6 +718,9 @@ public:
+ 				}
+ 			}
+ 
++			// halfcraft: the client's caption doesn't say who speaks it; minecraft's chat names them
++			halfcraft::server_caption_speaker( lowercase, pActor );
++
+ 			// Send caption and duration hint down to client
+ 			UserMessageBegin( filterCopy, "CloseCaption" );
+ 				WRITE_STRING( lowercase );
 diff --git a/src/game/shared/baseentity_shared.cpp b/src/game/shared/baseentity_shared.cpp
 index bf44dc19..84cf3376 100644
 --- a/src/game/shared/baseentity_shared.cpp

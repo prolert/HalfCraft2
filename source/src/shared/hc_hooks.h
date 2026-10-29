@@ -5,9 +5,11 @@
 
 #include "inputsystem/ButtonCode.h"
 
+class C_BaseCombatWeapon;
 class CBaseCombatWeapon;
 class CBaseEntity;
 class CBasePlayer;
+class CHudTexture;
 class CTakeDamageInfo;
 class CUserCmd;
 class CViewSetup;
@@ -97,6 +99,32 @@ namespace halfcraft
 	/// scripts/credits.txt from.
 	const char* client_campaign_path_id();
 
+	/// CHudHintKeyDisplay::SetHintText: the key hint half-life shows next, localized, with its
+	/// %command% placeholders (hc_hints.cpp).
+	void client_key_hint_text(const wchar_t* text);
+
+	/// CHudHintKeyDisplay::ShouldDraw: minecraft shows the key hint as a toast while its hud is up.
+	/// @param shown - source would draw it (it hasn't faded out)
+	/// @return whether source draws it itself
+	bool client_key_hint_drawn(bool shown);
+
+	/// CHudHistoryResource::AddIconToHistory: half-life's pickup history (a weapon, ammo, a health kit)
+	/// goes to minecraft as toasts while its hud is up (hc_pickups.cpp).
+	/// @param type - HISTSLOT_*
+	/// @param id - the ammo type, for ammo
+	/// @param weapon - the weapon, for one
+	/// @param icon - the item's icon, for an item
+	/// @return true when minecraft took it: source keeps it out of its own history
+	bool client_pickup(int type, int id, C_BaseCombatWeapon* weapon, int count, CHudTexture* icon);
+
+	/// CHudCloseCaption::Process, once source would show the caption: minecraft writes it into its
+	/// chat (speech) or its subtitles (<sfx>) instead (hc_captions.cpp).
+	/// @param stream - the localized caption with its markup, its <delay>s and all
+	/// @param token - the caption's token, which names its speaker (server_caption_speaker)
+	/// @param from_player - the sound came from the player (<playerclr> picks the first colour)
+	/// @return true when minecraft took it: source shows nothing
+	bool client_caption(const wchar_t* stream, const char* token, bool from_player);
+
 	/// ClientModeShared::PostRenderVGui: the frame is finished (the world, the hud and minecraft's
 	/// overlay); only source's menus and console still go over it.
 	void client_post_render_vgui();
@@ -118,6 +146,13 @@ namespace halfcraft
 #endif
 
 #ifdef GAME_DLL
+	/// as the server sends a caption to the client, for a sound (SoundEmitterSystem.cpp's
+	/// EmitCloseCaption) or a scene's line (CSceneEntity::DispatchStartSpeak): who says it, which the
+	/// client's caption doesn't carry (hc_captions.cpp).
+	/// @param token - the caption's token, lower case
+	/// @param actor - the entity the sound comes from, or nullptr
+	void server_caption_speaker(const char* token, CBaseEntity* actor);
+
 	/// CGameMovement::HalfCraftMove ran for the player this tick.
 	void server_note_puppet_move();
 	/// the player's latest commands came from minecraft.

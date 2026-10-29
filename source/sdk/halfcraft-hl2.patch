@@ -276,6 +276,30 @@ index c37e7650..1a89529b 100644
  		view->UpdateShadowDepthTexture( m_DummyColorTexture, shadowDepthTexture, shadowView );
  
  		// Associate the shadow depth texture and stencil bit with the flashlight for use during scene rendering
+diff --git a/sp/src/game/client/history_resource.cpp b/sp/src/game/client/history_resource.cpp
+index c0743b41..69148bf8 100644
+--- a/sp/src/game/client/history_resource.cpp
++++ b/sp/src/game/client/history_resource.cpp
+@@ -13,6 +13,8 @@
+ #include "iclientmode.h"
+ #include "vgui_controls/AnimationController.h"
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -165,6 +167,10 @@ void CHudHistoryResource::AddToHistory( int iType, const char *szName, int iCoun
+ //-----------------------------------------------------------------------------
+ void CHudHistoryResource::AddIconToHistory( int iType, int iId, C_BaseCombatWeapon *weapon, int iCount, CHudTexture *icon )
+ {
++	// halfcraft: minecraft shows it as a toast instead, while its hud is up
++	if ( halfcraft::client_pickup( iType, iId, weapon, iCount, icon ) )
++		return;
++
+ 	m_bNeedsDraw = true;
+ 
+ 	// Check to see if the pic would have to be drawn too high. If so, start again from the bottom
 diff --git a/sp/src/game/client/hl2/hud_credits.cpp b/sp/src/game/client/hl2/hud_credits.cpp
 index 8021c49a..e27d4a31 100644
 --- a/sp/src/game/client/hl2/hud_credits.cpp
@@ -300,6 +324,61 @@ index 8021c49a..e27d4a31 100644
  	{
  		pKV->deleteThis();
  
+diff --git a/sp/src/game/client/hud_closecaption.cpp b/sp/src/game/client/hud_closecaption.cpp
+index f72b9fc1..da9e28f0 100644
+--- a/sp/src/game/client/hud_closecaption.cpp
++++ b/sp/src/game/client/hud_closecaption.cpp
+@@ -23,6 +23,8 @@
+ #include "datacache/idatacache.h"
+ #include "SoundEmitterSystem/isoundemittersystembase.h"
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -1476,6 +1478,10 @@ void CHudCloseCaption::Process( const wchar_t *stream, float duration, const cha
+ 		}
+ 	}
+ 
++	// halfcraft: minecraft shows it in its chat or its subtitles instead, while its hud is up
++	if ( valid && halfcraft::client_caption( stream, tokenstream, fromplayer ) )
++		return;
++
+ 	float lifespan = duration + cc_linger_time.GetFloat();
+ 	
+ 	float addedlife = 0.0f;
+diff --git a/sp/src/game/client/hud_hintdisplay.cpp b/sp/src/game/client/hud_hintdisplay.cpp
+index 487633bd..40ca556c 100644
+--- a/sp/src/game/client/hud_hintdisplay.cpp
++++ b/sp/src/game/client/hud_hintdisplay.cpp
+@@ -18,6 +18,8 @@
+ #include "IGameUIFuncs.h"
+ #include "inputsystem/iinputsystem.h"
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -423,7 +425,8 @@ void CHudHintKeyDisplay::ApplySchemeSettings( vgui::IScheme *pScheme )
+ //-----------------------------------------------------------------------------
+ bool CHudHintKeyDisplay::ShouldDraw( void )
+ {
+-	return ( ( GetAlpha() > 0 ) && CHudElement::ShouldDraw() );
++	// halfcraft: minecraft shows it as a toast instead, while its hud is up
++	return halfcraft::client_key_hint_drawn( ( GetAlpha() > 0 ) && CHudElement::ShouldDraw() );
+ }
+ 
+ //-----------------------------------------------------------------------------
+@@ -479,6 +482,7 @@ bool CHudHintKeyDisplay::SetHintText( const char *text )
+ 		g_pVGuiLocalize->ConvertANSIToUnicode(text, wszBuf, sizeof(wszBuf));
+ 		ws = wszBuf;
+ 	}
++	halfcraft::client_key_hint_text( ws );
+ 
+ 	// parse out the text into a label set
+ 	while ( *ws )
 diff --git a/sp/src/game/client/hud_pdump.cpp b/sp/src/game/client/hud_pdump.cpp
 index 612a18d7..666c8888 100644
 --- a/sp/src/game/client/hud_pdump.cpp
@@ -766,6 +845,29 @@ index b607bbab..8a21a57c 100644
  		player->ApplyAbsVelocityImpulse( (1.0 + ( frametime * 0.5 )) * player->GetBaseVelocity() );
  		player->SetBaseVelocity( vec3_origin );
  	}
+diff --git a/sp/src/game/server/sceneentity.cpp b/sp/src/game/server/sceneentity.cpp
+index 495aa004..b23f7dd5 100644
+--- a/sp/src/game/server/sceneentity.cpp
++++ b/sp/src/game/server/sceneentity.cpp
+@@ -38,6 +38,8 @@
+ #include "npc_alyx_episodic.h"
+ #endif // HL2_EPISODIC
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -1851,6 +1853,9 @@ void CSceneEntity::DispatchStartSpeak( CChoreoScene *scene, CBaseFlex *actor, CC
+ 						byteflags |= CLOSE_CAPTION_GENDER_FEMALE;
+ 					}
+ 
++					// halfcraft: the client's caption doesn't say who speaks it; minecraft's chat names them
++					halfcraft::server_caption_speaker( lowercase, actor );
++
+ 					// Send caption and duration hint down to client
+ 					UserMessageBegin( filter, "CloseCaption" );
+ 						WRITE_STRING( lowercase );
 diff --git a/sp/src/game/server/server_episodic.vpc b/sp/src/game/server/server_episodic.vpc
 index 81c9297b..405a59ef 100644
 --- a/sp/src/game/server/server_episodic.vpc
@@ -792,6 +894,29 @@ index 0fc2e64b..f2885746 100644
  
  $Configuration
  {
+diff --git a/sp/src/game/shared/SoundEmitterSystem.cpp b/sp/src/game/shared/SoundEmitterSystem.cpp
+index 6d27fde9..8680f68e 100644
+--- a/sp/src/game/shared/SoundEmitterSystem.cpp
++++ b/sp/src/game/shared/SoundEmitterSystem.cpp
+@@ -34,6 +34,8 @@
+ #define CRecipientFilter C_RecipientFilter
+ #endif
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -727,6 +729,9 @@ public:
+ 				}
+ 			}
+ 
++			// halfcraft: the client's caption doesn't say who speaks it; minecraft's chat names them
++			halfcraft::server_caption_speaker( lowercase, pActor );
++
+ 			// Send caption and duration hint down to client
+ 			UserMessageBegin( filterCopy, "CloseCaption" );
+ 				WRITE_STRING( lowercase );
 diff --git a/sp/src/game/shared/achievement_saverestore.cpp b/sp/src/game/shared/achievement_saverestore.cpp
 index b9de1e2d..48b53035 100644
 --- a/sp/src/game/shared/achievement_saverestore.cpp

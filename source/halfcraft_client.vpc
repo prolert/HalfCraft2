@@ -35,11 +35,14 @@ $Project
 			$File	"$HALFCRAFTDIR\src\client\hc_blocks.h"
 			$File	"$HALFCRAFTDIR\src\client\hc_blocks.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_campaign_text.cpp"
+			$File	"$HALFCRAFTDIR\src\client\hc_captions.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_client.h"
 			$File	"$HALFCRAFTDIR\src\client\hc_client.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_console_input.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_coop.cpp"
+			$File	"$HALFCRAFTDIR\src\client\hc_hints.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_input.cpp"
+			$File	"$HALFCRAFTDIR\src\client\hc_pickups.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_jumps.h"
 			$File	"$HALFCRAFTDIR\src\client\hc_jumps.cpp"
 			$File	"$HALFCRAFTDIR\src\client\hc_minecraft.cpp"
@@ -78,6 +81,7 @@ $Project
 				$File	"$HALFCRAFTDIR\src\core\hc_module.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_prism.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_text.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_text_input.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_ticks.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_units.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_chapters.h"
@@ -85,6 +89,7 @@ $Project
 						"$HALFCRAFTDIR\src\core\hc_log.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_module.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_prism.cpp" \
+						"$HALFCRAFTDIR\src\core\hc_text_input.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_ticks.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_units.cpp"
 				{

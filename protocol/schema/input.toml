@@ -102,6 +102,17 @@ kStrScreenshot = { value = 2, doc = """
   halfcraft-screenshot-*.rgb, width * height RGB8 pixels, top row first, nothing else;
   Minecraft saves it as its own screenshot and deletes the file
   "fail <request> <reason>": the host had no frame to give (loading, ...)""" }
+kStrHint = { value = 3, doc = """
+(#26) the host's key hint for Minecraft to show as a toast, "" when it goes away. "%<command>%"
+is a key Minecraft names from its own binding of that host command (%+jump%, %+attack%, ...),
+"%sc:<n>%" a key by its SDL scancode, "%=<name>%" a key the host named itself""" }
+kStrPickup = { value = 4, doc = """
+(#26) something the host's player picked up, for Minecraft to show as a toast: "weapon <WeaponId>",
+"ammo <host ammo type> <count>" or "item <host classname>"""" }
+kStrCaption = { value = 5, doc = """
+(#26) one of the host's close captions, while Minecraft shows them (kMcSubtitles): "<from player 0|1>
+<speaker> <caption>", the speaker as "<host classname>/<model name>" ("-" for none), the caption
+localized with the host's markup (<clr:r,g,b>, <I>, <sfx>, <delay:s>, ...)""" }
 
 [enums.HealKind]
 type = "u16"

@@ -27,6 +27,7 @@
 //            model files only when it hasn't (hc_campaign_models.cpp)
 //   server in level - the one the other way, a server.dll export client.dll looks up: whether the
 //            server has a level; the client's hc_host waits for it to go before maxplayers (hc_coop.cpp)
+//   speakers - who says a close caption (the server knows); minecraft's chat names them
 
 #include <cstdint>
 
@@ -161,4 +162,12 @@ namespace halfcraft
 	using ServerInLevelFn = int (*)();
 
 	inline constexpr char HC_SERVER_IN_LEVEL_EXPORT[] = "HalfCraft_ServerInLevel";
+
+	/// server.dll -> client.dll: who says a close caption the server sends (a sound's or a scene's).
+	/// the caption that reaches the client has only its token; minecraft's chat names the speaker.
+	/// @param token - the caption's token, lower case
+	/// @param speaker - "<classname>/<model file name, no folder or extension>", lower case
+	using CaptionSpeakerFn = void (*)(const char* token, const char* speaker);
+
+	inline constexpr char HC_CAPTION_SPEAKER_EXPORT[] = "HalfCraft_CaptionSpeaker";
 }

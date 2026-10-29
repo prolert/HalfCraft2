@@ -10,6 +10,7 @@
     "HostDebugEntriesMixin",
     "HostDebugEntryListMixin",
     "HostDebugOverlayMixin",
+    "HudAccessor",
     "InputConstantsMixin",
     "LeashFeatureRendererAccessor",
     "LevelExtractorMixin",

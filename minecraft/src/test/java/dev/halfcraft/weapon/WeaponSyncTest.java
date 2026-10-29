@@ -103,4 +103,37 @@ class WeaponSyncTest {
 		slots[8] = HOST_WEAPON_RPG;
 		assertEquals(List.of(new WeaponSync.Remove(0), new WeaponSync.Remove(3), new WeaponSync.Remove(8)), WeaponSync.plan(slots, new int[0], 0, Map.of()));
 	}
+
+	@Test
+	void takesAStandInPickedUpInTheCreativeInventoryOntoTheCursor() {
+		assertEquals(HOST_WEAPON_RPG, WeaponSync.creativeCursor(0, HOST_WEAPON_RPG, EMPTY));
+	}
+
+	@Test
+	void emptiesTheCreativeCursorWhenItsStandInIsPutDown() {
+		assertEquals(0, WeaponSync.creativeCursor(HOST_WEAPON_RPG, EMPTY, HOST_WEAPON_RPG));
+	}
+
+	@Test
+	void takesTheStandInAPutDownOneSwappedWithOntoTheCreativeCursor() {
+		assertEquals(HOST_WEAPON_SMG1, WeaponSync.creativeCursor(HOST_WEAPON_RPG, HOST_WEAPON_SMG1, HOST_WEAPON_RPG));
+	}
+
+	@Test
+	void leavesTheCreativeCursorAloneForOtherItems() {
+		assertEquals(HOST_WEAPON_RPG, WeaponSync.creativeCursor(HOST_WEAPON_RPG, OTHER, EMPTY));
+		assertEquals(HOST_WEAPON_RPG, WeaponSync.creativeCursor(HOST_WEAPON_RPG, EMPTY, OTHER));
+	}
+
+	@Test
+	void keepsAStandInMovedThroughTheCreativeCursorWhereItWasPutDown() {
+		// picked out of slot 30 (the creative inventory empties it and the cursor holds it), put down in hotbar slot 4
+		int[] slots = emptyInventory();
+		Map<Integer, Integer> lastSlot = Map.of(HOST_WEAPON_RPG, 30);
+		int cursor = WeaponSync.creativeCursor(0, HOST_WEAPON_RPG, EMPTY);
+		assertEquals(List.of(), WeaponSync.plan(slots, new int[] { HOST_WEAPON_RPG }, cursor, lastSlot));
+		cursor = WeaponSync.creativeCursor(cursor, EMPTY, HOST_WEAPON_RPG);
+		slots[4] = HOST_WEAPON_RPG;
+		assertEquals(List.of(), WeaponSync.plan(slots, new int[] { HOST_WEAPON_RPG }, cursor, lastSlot));
+	}
 }

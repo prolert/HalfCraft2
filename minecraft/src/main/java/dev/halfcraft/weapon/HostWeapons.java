@@ -30,7 +30,8 @@ import net.minecraft.world.item.ItemStack;
  * stand-in can't leave the inventory: Q and F leave it in the hand (WeaponInputMixin), dropping it
  * any other way (WeaponDropMixin) and putting it into a container (WeaponSlotMixin,
  * {@link WeaponItem#canFitInsideContainerItems()}) fail, and whatever slips past (the creative
- * inventory) is put right on the next tick. When Half-Life switches weapons by itself, the hand
+ * inventory) is put right on the next tick. A stand-in on the creative inventory's cursor, which
+ * the server never sees, is counted as carried ({@link #creativeSlotSet}). When Half-Life switches weapons by itself, the hand
  * follows ({@link #followHalfLife}).
  */
 public final class HostWeapons {
@@ -42,6 +43,8 @@ public final class HostWeapons {
 	private static final Map<UUID, Set<Integer>> WAITING = new HashMap<>();
 	// per player: the weapon Half-Life had out last tick
 	private static final Map<UUID, Integer> LAST_OUT = new HashMap<>();
+	// per player: the stand-in on the creative inventory's cursor, which only the client has
+	private static final Map<UUID, Integer> CREATIVE_CURSOR = new HashMap<>();
 
 	private HostWeapons() {
 	}
@@ -52,6 +55,12 @@ public final class HostWeapons {
 			ITEMS.put(weapon.id(), Registry.register(BuiltInRegistries.ITEM, key, new WeaponItem(new Item.Properties().setId(key).stacksTo(1), weapon)));
 		}
 		ServerTickEvents.END_SERVER_TICK.register(HostWeapons::serverTick);
+	}
+
+	/** A stand-in for the weapon with that WeaponId; empty for an id no weapon has. */
+	public static ItemStack standIn(int weapon) {
+		WeaponItem item = ITEMS.get(weapon);
+		return item == null ? ItemStack.EMPTY : new ItemStack(item);
 	}
 
 	public static boolean isStandIn(ItemStack stack) {
@@ -108,14 +117,39 @@ public final class HostWeapons {
 		HalfCraft.LOG.info("HalfCraft: Half-Life switched from its {} to its {} by itself, which isn't on the hotbar: the hand stays", name(before), name(out));
 	}
 
+	/** What a slot holding {@code stack} is to {@link WeaponSync}: a weapon id, OTHER or EMPTY. */
+	private static int slotContent(ItemStack stack) {
+		return stack.isEmpty() ? WeaponSync.EMPTY : weaponId(stack);
+	}
+
+	/** The creative inventory set one of the player's slots (WeaponCreativeMixin): a stand-in may be on its cursor now, or off it. */
+	public static void creativeSlotSet(ServerPlayer player, ItemStack before, ItemStack after) {
+		int cursor = WeaponSync.creativeCursor(CREATIVE_CURSOR.getOrDefault(player.getUUID(), WeaponSync.OTHER), slotContent(before), slotContent(after));
+		if (cursor > WeaponSync.OTHER) {
+			CREATIVE_CURSOR.put(player.getUUID(), cursor);
+		} else {
+			CREATIVE_CURSOR.remove(player.getUUID());
+		}
+	}
+
+	/** The player closed a screen: a stand-in still on the creative cursor was thrown away or deleted, and the next tick puts it back. */
+	public static void screenClosed(ServerPlayer player) {
+		CREATIVE_CURSOR.remove(player.getUUID());
+	}
+
 	private static void sync(ServerPlayer player, int[] owned) {
 		Inventory inventory = player.getInventory();
 		int[] slots = new int[SLOTS];
 		for (int slot = 0; slot < SLOTS; slot++) {
-			ItemStack stack = inventory.getItem(slot);
-			slots[slot] = stack.isEmpty() ? WeaponSync.EMPTY : weaponId(stack);
+			slots[slot] = slotContent(inventory.getItem(slot));
+		}
+		if (!player.hasInfiniteMaterials()) {
+			CREATIVE_CURSOR.remove(player.getUUID());
 		}
 		int carried = weaponId(player.containerMenu.getCarried());
+		if (carried == Proto.HOST_WEAPON_NONE) {
+			carried = CREATIVE_CURSOR.getOrDefault(player.getUUID(), Proto.HOST_WEAPON_NONE);
+		}
 		Map<Integer, Integer> lastSlots = LAST_SLOTS.computeIfAbsent(player.getUUID(), k -> new HashMap<>());
 		List<WeaponSync.Change> changes = WeaponSync.plan(slots, owned, carried, lastSlots);
 		for (WeaponSync.Change change : changes) {
@@ -130,7 +164,7 @@ public final class HostWeapons {
 				present.add(id);
 			}
 		}
-		present.add(weaponId(player.containerMenu.getCarried()));
+		present.add(carried);
 		Set<Integer> waiting = WAITING.computeIfAbsent(player.getUUID(), k -> new HashSet<>());
 		for (int id : owned) {
 			if (present.contains(id)) {
@@ -160,7 +194,8 @@ public final class HostWeapons {
 				HalfCraft.LOG.info("HalfCraft: Half-Life's {} went back from slot {} to slot {}", name(weaponId(from)), swap.from(), swap.to());
 			}
 			case WeaponSync.ClearCarried _ -> {
-				int id = weaponId(player.containerMenu.getCarried());
+				Integer creative = CREATIVE_CURSOR.remove(player.getUUID());
+				int id = creative != null ? creative : weaponId(player.containerMenu.getCarried());
 				player.containerMenu.setCarried(ItemStack.EMPTY);
 				HalfCraft.LOG.info("HalfCraft: took Half-Life's {} off the cursor (Half-Life doesn't have it, or it was there twice)", name(id));
 			}

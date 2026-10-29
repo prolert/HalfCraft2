@@ -404,6 +404,9 @@ public final class HostClient {
 		if (minecraft.gui.screen() != null) {
 			flags |= Proto.MC_SCREEN_OPEN;
 		}
+		if (minecraft.options.showSubtitles().get()) {
+			flags |= Proto.MC_SUBTITLES;
+		}
 		mc.flags = flags;
 		mc.sensitivity = minecraft.options.sensitivity().get().floatValue();
 		mc.teleportAck = holdPos == null ? teleportAck : teleportAck - 1; // not "arrived" until we are released

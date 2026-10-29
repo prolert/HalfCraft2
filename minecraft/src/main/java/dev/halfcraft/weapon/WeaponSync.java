@@ -129,6 +129,24 @@ public final class WeaponSync {
 		return changes;
 	}
 
+	/**
+	 * The creative inventory keeps its cursor to itself: the server only hears what each slot holds
+	 * now. A stand-in that leaves a slot without coming back in its place is on that cursor until it
+	 * is put down, so the next sync doesn't bring it back where it was (and then take the one put
+	 * down for a second copy).
+	 *
+	 * @param cursor the weapon on the creative cursor, or 0
+	 * @param before what the slot held: a weapon id, {@link #OTHER} or {@link #EMPTY}
+	 * @param after  what the creative inventory set it to
+	 * @return the weapon on the creative cursor now, or 0
+	 */
+	public static int creativeCursor(int cursor, int before, int after) {
+		if (after > OTHER && after == cursor) {
+			return before > OTHER ? before : OTHER;
+		}
+		return before > OTHER && before != after ? before : cursor;
+	}
+
 	/** The first empty main inventory slot (the hotbar comes first), or -1. */
 	private static int firstEmpty(int[] work) {
 		for (int slot = 0; slot < Math.min(MAIN_SLOTS, work.length); slot++) {

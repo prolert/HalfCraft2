@@ -8,6 +8,8 @@
 #include <optional>
 #include <vector>
 
+#include "inputsystem/ButtonCode.h"
+
 #include "core/hc_link.h"
 #include "core/hc_ticks.h"
 #include "core/hc_units.h"
@@ -99,8 +101,19 @@ namespace halfcraft
 
 	ClientSession& client_session();
 
+	/// a source key's SDL scancode (usb hid usage, what minecraft 26.x reads); 0 for none (hc_input.cpp).
+	int sdl_scancode(ButtonCode_t code);
+
 	/// key/mouse bookkeeping when input moves between the games (hc_input.cpp).
 	void input_release_all(ClientSession& session);
+
+	/// every frame: minecraft's show subtitles option turns source's close captions on or off when it
+	/// changes (hc_captions.cpp).
+	void captions_follow_minecraft(const ClientSession& session);
+
+	/// every frame: what the player typed goes to minecraft's open screen as characters, in their
+	/// keyboard layout (hc_input.cpp).
+	void input_send_text(ClientSession& session);
 
 	/// how much smaller than the viewport minecraft draws its overlay (hc_overlay.cpp, hc_overlay_scale).
 	int overlay_divisor_for(int viewport_w, int viewport_h);

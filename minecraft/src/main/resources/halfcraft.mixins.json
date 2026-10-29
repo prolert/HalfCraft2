@@ -46,6 +46,7 @@
     "ServerPlayerMixin",
     "WalkNodeEvaluatorMixin",
     "WeaponClickMixin",
+    "WeaponCreativeMixin",
     "WeaponDropMixin",
     "WeaponSlotMixin"
   ],

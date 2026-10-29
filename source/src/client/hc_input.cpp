@@ -12,6 +12,7 @@
 
 #include "client/hc_client.h"
 #include "client/hc_weapons.h"
+#include "core/hc_text_input.h"
 #include "shared/hc_hooks.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
@@ -23,74 +24,76 @@ namespace halfcraft
 	{
 		constexpr int SDL_NONE = 0;
 		constexpr int WHEEL_NOTCH = 120;
+	}
 
-		/// source key -> SDL scancode (usb hid usage, what minecraft 26.x reads).
-		int sdl_scancode(ButtonCode_t code)
-		{
-			if (code >= KEY_A && code <= KEY_Z) {
-				return 4 + (code - KEY_A);
-			}
-			if (code >= KEY_1 && code <= KEY_9) {
-				return 30 + (code - KEY_1);
-			}
-			if (code >= KEY_PAD_1 && code <= KEY_PAD_9) {
-				return 89 + (code - KEY_PAD_1);
-			}
-			if (code >= KEY_F1 && code <= KEY_F12) {
-				return 58 + (code - KEY_F1);
-			}
-			switch (code) {
-			case KEY_0: return 39;
-			case KEY_PAD_0: return 98;
-			case KEY_PAD_DIVIDE: return 84;
-			case KEY_PAD_MULTIPLY: return 85;
-			case KEY_PAD_MINUS: return 86;
-			case KEY_PAD_PLUS: return 87;
-			case KEY_PAD_ENTER: return 88;
-			case KEY_PAD_DECIMAL: return 99;
-			case KEY_LBRACKET: return 47;
-			case KEY_RBRACKET: return 48;
-			case KEY_SEMICOLON: return 51;
-			case KEY_APOSTROPHE: return 52;
-			case KEY_BACKQUOTE: return 53;
-			case KEY_COMMA: return 54;
-			case KEY_PERIOD: return 55;
-			case KEY_SLASH: return 56;
-			case KEY_BACKSLASH: return 49;
-			case KEY_MINUS: return 45;
-			case KEY_EQUAL: return 46;
-			case KEY_ENTER: return 40;
-			case KEY_SPACE: return 44;
-			case KEY_BACKSPACE: return 42;
-			case KEY_TAB: return 43;
-			case KEY_CAPSLOCK: return 57;
-			case KEY_NUMLOCK: return 83;
-			case KEY_ESCAPE: return 41;
-			case KEY_SCROLLLOCK: return 71;
-			case KEY_INSERT: return 73;
-			case KEY_DELETE: return 76;
-			case KEY_HOME: return 74;
-			case KEY_END: return 77;
-			case KEY_PAGEUP: return 75;
-			case KEY_PAGEDOWN: return 78;
-			case KEY_BREAK: return 72;
-			case KEY_LSHIFT: return 225;
-			case KEY_RSHIFT: return 229;
-			case KEY_LALT: return 226;
-			case KEY_RALT: return 230;
-			case KEY_LCONTROL: return 224;
-			case KEY_RCONTROL: return 228;
-			case KEY_LWIN: return 227;
-			case KEY_RWIN: return 231;
-			case KEY_APP: return 101;
-			case KEY_UP: return 82;
-			case KEY_LEFT: return 80;
-			case KEY_DOWN: return 81;
-			case KEY_RIGHT: return 79;
-			default: return SDL_NONE;
-			}
+	int sdl_scancode(ButtonCode_t code)
+	{
+		if (code >= KEY_A && code <= KEY_Z) {
+			return 4 + (code - KEY_A);
 		}
+		if (code >= KEY_1 && code <= KEY_9) {
+			return 30 + (code - KEY_1);
+		}
+		if (code >= KEY_PAD_1 && code <= KEY_PAD_9) {
+			return 89 + (code - KEY_PAD_1);
+		}
+		if (code >= KEY_F1 && code <= KEY_F12) {
+			return 58 + (code - KEY_F1);
+		}
+		switch (code) {
+		case KEY_0: return 39;
+		case KEY_PAD_0: return 98;
+		case KEY_PAD_DIVIDE: return 84;
+		case KEY_PAD_MULTIPLY: return 85;
+		case KEY_PAD_MINUS: return 86;
+		case KEY_PAD_PLUS: return 87;
+		case KEY_PAD_ENTER: return 88;
+		case KEY_PAD_DECIMAL: return 99;
+		case KEY_LBRACKET: return 47;
+		case KEY_RBRACKET: return 48;
+		case KEY_SEMICOLON: return 51;
+		case KEY_APOSTROPHE: return 52;
+		case KEY_BACKQUOTE: return 53;
+		case KEY_COMMA: return 54;
+		case KEY_PERIOD: return 55;
+		case KEY_SLASH: return 56;
+		case KEY_BACKSLASH: return 49;
+		case KEY_MINUS: return 45;
+		case KEY_EQUAL: return 46;
+		case KEY_ENTER: return 40;
+		case KEY_SPACE: return 44;
+		case KEY_BACKSPACE: return 42;
+		case KEY_TAB: return 43;
+		case KEY_CAPSLOCK: return 57;
+		case KEY_NUMLOCK: return 83;
+		case KEY_ESCAPE: return 41;
+		case KEY_SCROLLLOCK: return 71;
+		case KEY_INSERT: return 73;
+		case KEY_DELETE: return 76;
+		case KEY_HOME: return 74;
+		case KEY_END: return 77;
+		case KEY_PAGEUP: return 75;
+		case KEY_PAGEDOWN: return 78;
+		case KEY_BREAK: return 72;
+		case KEY_LSHIFT: return 225;
+		case KEY_RSHIFT: return 229;
+		case KEY_LALT: return 226;
+		case KEY_RALT: return 230;
+		case KEY_LCONTROL: return 224;
+		case KEY_RCONTROL: return 228;
+		case KEY_LWIN: return 227;
+		case KEY_RWIN: return 231;
+		case KEY_APP: return 101;
+		case KEY_UP: return 82;
+		case KEY_LEFT: return 80;
+		case KEY_DOWN: return 81;
+		case KEY_RIGHT: return 79;
+		default: return SDL_NONE;
+		}
+	}
 
+	namespace
+	{
 		/// source mouse button -> SDL button (1 left, 2 middle, 3 right, 4 x1, 5 x2).
 		int sdl_button(ButtonCode_t code)
 		{
@@ -100,42 +103,6 @@ namespace halfcraft
 			case MOUSE_RIGHT: return 3;
 			case MOUSE_4: return 4;
 			case MOUSE_5: return 5;
-			default: return 0;
-			}
-		}
-
-		/// the character a key types on a us layout (minecraft's text fields need characters, not
-		/// keys). 0 when it types nothing.
-		int typed_char(ButtonCode_t code, bool shift)
-		{
-			if (code >= KEY_A && code <= KEY_Z) {
-				return (shift ? 'A' : 'a') + (code - KEY_A);
-			}
-			if (code >= KEY_0 && code <= KEY_9) {
-				static constexpr char SHIFTED[] = ")!@#$%^&*(";
-				return shift ? SHIFTED[code - KEY_0] : '0' + (code - KEY_0);
-			}
-			if (code >= KEY_PAD_0 && code <= KEY_PAD_9) {
-				return '0' + (code - KEY_PAD_0);
-			}
-			switch (code) {
-			case KEY_SPACE: return ' ';
-			case KEY_LBRACKET: return shift ? '{' : '[';
-			case KEY_RBRACKET: return shift ? '}' : ']';
-			case KEY_SEMICOLON: return shift ? ':' : ';';
-			case KEY_APOSTROPHE: return shift ? '"' : '\'';
-			case KEY_BACKQUOTE: return shift ? '~' : '`';
-			case KEY_COMMA: return shift ? '<' : ',';
-			case KEY_PERIOD: return shift ? '>' : '.';
-			case KEY_SLASH: return shift ? '?' : '/';
-			case KEY_BACKSLASH: return shift ? '|' : '\\';
-			case KEY_MINUS: return shift ? '_' : '-';
-			case KEY_EQUAL: return shift ? '+' : '=';
-			case KEY_PAD_DIVIDE: return '/';
-			case KEY_PAD_MULTIPLY: return '*';
-			case KEY_PAD_MINUS: return '-';
-			case KEY_PAD_PLUS: return '+';
-			case KEY_PAD_DECIMAL: return '.';
 			default: return 0;
 			}
 		}
@@ -156,10 +123,8 @@ namespace halfcraft
 			}
 		}
 
-		bool g_shift_down = false;
-		int  g_control_down = 0;
-		int  g_source_buttons = 0;  // mouse buttons (sdl numbers as bits) whose press went to source: their release does too
-		int  g_hand_buttons = 0;    // mouse buttons whose press went to minecraft's hands during a ride: their release does too
+		int g_source_buttons = 0;  // mouse buttons (sdl numbers as bits) whose press went to source: their release does too
+		int g_hand_buttons = 0;    // mouse buttons whose press went to minecraft's hands during a ride: their release does too
 
 		/// on a ladder or a ride source moves the player, and minecraft keeps its hands: the mouse
 		/// buttons, the wheel and the hotbar keys. a half-life weapon in its hand, or a prop carried with
@@ -205,8 +170,6 @@ namespace halfcraft
 		session.reload_held = false;
 		g_source_buttons = 0;
 		g_hand_buttons = 0;
-		g_shift_down = false;
-		g_control_down = 0;
 		session.link.push_input(proto::kInReleaseAll, 0);
 	}
 
@@ -215,6 +178,9 @@ namespace halfcraft
 		auto&      s = client_session();
 		const bool pressed = down != 0;
 		if (source_keeps(code, s) || (!s.minecraft_owns_input && !minecraft_keeps(code, pressed, s))) {
+			if (pressed) {
+				text_input_take();  // the console's key types its ` too
+			}
 			return true;
 		}
 
@@ -257,26 +223,25 @@ namespace halfcraft
 			}
 			return false;
 		}
-		if (code == KEY_LSHIFT || code == KEY_RSHIFT) {
-			g_shift_down = pressed;
-		}
-		if (code == KEY_LCONTROL || code == KEY_RCONTROL) {
-			const int bit = code == KEY_LCONTROL ? 1 : 2;
-			g_control_down = pressed ? (g_control_down | bit) : (g_control_down & ~bit);
-		}
 		if (code == KEY_W) {
 			s.forward_held = pressed;  // still minecraft's; source only watches it for ladders
 		}
 		if (const int scancode = sdl_scancode(code)) {
 			s.link.push_input(proto::kInKey, static_cast<std::uint16_t>(scancode), pressed ? 1 : 0);
-			// shortcuts already reach minecraft as key events; typing their letters would alter the field too.
-			if (pressed && s.mc_screen_open && g_control_down == 0) {
-				if (const int ch = typed_char(code, g_shift_down)) {
-					s.link.push_input(proto::kInText, 0, ch);
-				}
-			}
 		}
 		return false;  // minecraft's, even keys it doesn't know (joystick, ...)
+	}
+
+	void input_send_text(ClientSession& s)
+	{
+		text_input_attach();
+		// what a key typed comes after the key, as from minecraft's own window. what's typed with no
+		// screen open (the T that opens chat) is nobody's
+		for (const char32_t ch : text_input_take()) {
+			if (s.minecraft_owns_input && s.mc_screen_open) {
+				s.link.push_input(proto::kInText, 0, static_cast<std::int32_t>(ch));
+			}
+		}
 	}
 
 	bool client_ui_toggle()
