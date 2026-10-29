@@ -2,7 +2,7 @@
 
 - Date: 2026-10-29
 - Branch: `main` (local commits only, never pushed)
-- Status: design; the link id (Task 1 of the plan) is being implemented
+- Status: design; the link id (Task 1 of the plan) is done (`66a775d`)
 - Inputs: the co-op feasibility study (architecture (a), its section 2; M1, its section 3) and the M0 go/no-go run on
   two copies on one PC (`main` at `2721b60`). Where they disagree, M0 wins: no `coop 1`, no saves with two slots, no
   landmark transitions, no `127.0.0.1`.
@@ -37,7 +37,7 @@ helpers return the host.
 | R4 | Testing | Two pairs on one PC, the user's choice: `-multirun` on the second Source copy, which has its own link id |
 | R5 | Scope | One map. Saves, transitions, vehicles and fixes per map are M3; death means respawn. M0's fixes fold into M1 in M0's order: respawn solidity, prediction speed, weapon sequence spam, spawn placement, the `!player` and helper NULLs. Carrying state across map changes is out of scope |
 | R6 | Players | Two for M1. N stays general wherever that costs nothing extra |
-| R7 | Link id (Task 1, in progress) | The id comes from env `HALFCRAFT_LINK` on both sides. Source also takes `-hc_link <id>` and exports it to its own environment, so the Minecraft it starts inherits it. With no id the names stay as they are today; with an id the mapping is `Local\HalfCraft_v1.<id>`, with `_frame` and `_minecraft` after it as today. Later tasks build on it unchanged |
+| R7 | Link id (Task 1, done: `66a775d`) | The id comes from env `HALFCRAFT_LINK` on both sides. Source also takes `-hc_link <id>` and exports it to its own environment, so the Minecraft it starts inherits it. With no id the names stay as they are today; with an id the mapping is `Local\HalfCraft_v1.<id>`, with `_frame` and `_minecraft` after it as today. Later tasks build on it unchanged |
 
 ### Decided here
 
@@ -80,7 +80,10 @@ helpers return the host.
   `Connection.isMemoryConnection()`, which is the host's own client, or when `usesAuthentication()` is false. A joining
   dev client is therefore sent an authenticating `ClientboundHelloPacket`, and its session join with the dev token
   fails. `publishServer(scope, guestCommands, port)` doesn't touch `onlineMode`, and `setUsesAuthentication(boolean)` is
-  public on `MinecraftServer`.
+  public on `MinecraftServer`. One branch of `handleHello` comes first, though: a connection whose requested name equals
+  the owner's (`equalsIgnoreCase`) gets the owner's profile with no authentication at all. So over a VPN with
+  `sv_lan 0`, anyone who logs in under the host's name gets in as the host (and kicks them: the next bullet). That is
+  vanilla's behaviour.
 - **One Microsoft account on two clients kicks the host.** Both clients carry the same UUID, and login calls
   `PlayerList.disconnectAllPlayersWithProfile(uuid)`, which disconnects the player already there (the host's own) with
   `multiplayer.disconnect.duplicate_login`.
@@ -182,11 +185,13 @@ What M1 adds, by side:
    both clients, and each client's `kRenDug` cuts the hole in its own view. The host's client hands the cell to the
    host's server.dll over the bridge (as today). That cuts the collision and streams the changed regions again, and the
    relay sends them to the guest, so both walk through. The host digs as today.
-7. **Death.** Source damage on the guest stays Source's (M2 links it). A dead player respawns (`deathmatch 1`): the
-   respawn hook makes them solid, and the spawn hook puts them next to a teammate with the suit. Their client.dll sees
-   the jump and teleports its Minecraft. The host's death in Minecraft kills the host's Source player (as today), who
-   then respawns. A guest's death in Minecraft respawns them in Minecraft; their client.dll takes it as Minecraft's own
-   jump, Source refuses a jump that doesn't fit, and Minecraft is resynced to where Source has the guest.
+7. **Death.** Source damage on the guest stays Source's (M2 links it). A dead player respawns when the player presses a
+   key (`deathmatch 1`; this game's rules are singleplayer's, so nothing respawns a player by itself: `mp_forcerespawn`
+   is multiplayer-only): the respawn hook makes them solid, and the spawn hook puts them next to a teammate with the
+   suit. Their client.dll sees the jump and teleports its Minecraft. The host's death in Minecraft kills the host's
+   Source player (as today), who then respawns the same way. A guest's death in Minecraft respawns them in Minecraft;
+   their client.dll takes it as Minecraft's own jump, Source refuses a jump that doesn't fit, and Minecraft is resynced
+   to where Source has the guest.
 8. **Leaving.** When the guest's Source disconnects, its client.dll writes `solo`. Its Minecraft leaves the host's
    world, clears the relayed collision, and opens its own world again. The host's relay forgets the player on
    disconnect. When the host quits, the guest's Source drops with "Server shutting down" and the same thing follows.
@@ -225,9 +230,10 @@ What M1 adds, by side:
 - **A different build on each side.** A guest whose `hc_coop_layout` differs disconnects from Source with
   `co-op: the host runs another HalfCraft build (protocol <theirs>, this one <ours>)`. A Minecraft mod that differs is
   refused by Fabric's own registry sync, with Fabric's message.
-- **A collision message over the payload limit.** An S2C custom payload holds at most 1 MiB. A recorded message that
-  wouldn't fit is never sent: the relay logs it once with its region, and the guest's hold times out there (6 s, as
-  today). Relayed bytes go into 8-byte-aligned memory before parsing, since a `byte[]` segment can't take `JAVA_INT`
+- **A collision message over the payload limit.** A custom payload holds at most 1 MiB, so `halfcraft:collision` is
+  registered with Fabric's `registerLarge` (it splits larger ones; the cap here is 8 MiB). A recorded message that
+  wouldn't fit even so is never sent: the relay logs it once with its region, and the guest's hold times out there (6 s,
+  as today). Relayed bytes go into 8-byte-aligned memory before parsing, since a `byte[]` segment can't take `JAVA_INT`
   reads.
 - **Bad C2S input.** A teleport with a coordinate that isn't finite or lies outside ±3·10⁷ is dropped and logged once.
   `HostDig.open` refuses as it does today.
@@ -251,7 +257,8 @@ What M1 adds, by side:
   - The Source-only fixes (respawn, prediction, sequences, spawn, helpers) run with Minecraft off, as M0 did.
   - The last task checks "done when" end to end.
 - **Not tested:** VPN play (`hc_host <map> vpn`, i.e. `sv_lan 0`; Windows Firewall for `hl2mp_win64.exe` and
-  `javaw.exe` on the VPN adapter, often a Public network), two PCs, a release's Prism instance as host or guest, and
+  `javaw.exe` on the VPN adapter, often a Public network; anyone who joins under the host's Minecraft name, case aside,
+  is taken for the host, as vanilla's login has it), two PCs, a release's Prism instance as host or guest, and
   more than two players.
 
 ## Out of scope
@@ -276,7 +283,8 @@ What M1 adds, by side:
 - **Load on one PC:** two Source copies (M0: fine) plus two Minecraft development clients and two Gradle runs.
 - **Two Gradle runs of one project at once** (`runTestClient` and `runTestGuestClient`). Running a client and a
   server from one project at the same time is common practice. The tooling task checks it first and falls back to
-  starting the second client's JVM from Loom's launch configuration.
+  starting the second client's JVM from Loom's launch
+  configuration, with no go-ahead from the user: it is dev tooling only.
 
 ## Questions for the user
 
@@ -285,7 +293,9 @@ Nothing waits on these: each has the default the plan uses.
 1. **Minecraft port.** The default is fixed `25565`, which `hc_coop_port` changes. Should HalfCraft use a less common port
    by default, in case a Minecraft server already runs on 25565?
 2. **Offline accounts.** The default allows them only in development clients; a release keeps online mode, so each
-   player needs their own Minecraft account. Should a release also offer an offline LAN mode, as e4all does?
+   player needs their own Minecraft account (vanilla's login also lets anyone who joins under the host's own name in
+   as the host, without authentication, whatever the mode). Should a release also offer an offline LAN mode, as e4all
+   does?
 3. **Friendly fire.** By default the players can't hurt each other in Source, and Minecraft PvP stays on as in any LAN
    world. Should Minecraft PvP be off too?
 4. **The guest's Minecraft commands.** By default a guest's `hc_mc` runs as a chat command, and a guest may run commands
@@ -300,3 +310,6 @@ Nothing waits on these: each has the default the plan uses.
    aren't linked before M2. Should it be hidden instead?
 9. **`hc_host` without a map.** By default it restarts the current map with two slots, or prints its usage line at the
    menu. Should it default to a fixed map instead?
+10. **Respawn by itself.** By default a dead player respawns when they press a key, as Half-Life 2's singleplayer rules
+    have it (nothing respawns a player on its own: `mp_forcerespawn` is multiplayer-only). Should they respawn by
+    themselves after a few seconds? That is a hook in Task 4's respawn code.
