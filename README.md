@@ -72,7 +72,7 @@ Minecraft's own keys (WASD, mouse, E for inventory, 1–9, F5 for the camera), p
 
 ## Known limits
 
-- Single player only. Co-op is planned: the first parts are on the `m1-minecraft` branch, and work is paused.
+- Single player only. Co-op is planned: the first parts are on the [`cooptest`](https://github.com/prolert/HalfCraft2/tree/cooptest) branch, and work is paused.
 - Blended grass and sand ground isn't cut by digging. Walls, floors, ceilings and rock are.
 - Near holes, some distant parts of a map can briefly fail to draw.
 
