@@ -23,6 +23,38 @@ namespace halfcraft
 	{
 		constexpr std::uint64_t MC_TIMEOUT_MS = 3000;
 
+		/// ascii as windows' wide functions take it.
+		std::wstring widen(std::string_view ascii)
+		{
+			std::wstring wide;
+			for (const char c : ascii) {
+				wide += static_cast<wchar_t>(static_cast<unsigned char>(c));
+			}
+			return wide;
+		}
+
+		/// one of this process's environment variables in utf-8; nullopt when it isn't set or is empty. a
+		/// character outside ascii stays what it is (no link id has one).
+		std::optional<std::string> environment_variable(const std::wstring& name)
+		{
+			const DWORD size = ::GetEnvironmentVariableW(name.c_str(), nullptr, 0);
+			if (size <= 1) {
+				return std::nullopt;
+			}
+			std::wstring wide(size, L'\0');
+			const DWORD  length = ::GetEnvironmentVariableW(name.c_str(), wide.data(), size);
+			if (length == 0 || length >= size) {
+				return std::nullopt;
+			}
+			wide.resize(length);
+			const int   bytes = ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(length), nullptr, 0, nullptr, nullptr);
+			std::string utf8(static_cast<std::size_t>(std::max(bytes, 0)), '\0');
+			if (bytes > 0) {
+				::WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(length), utf8.data(), bytes, nullptr, nullptr);
+			}
+			return utf8;
+		}
+
 		// server.dll's view of the mapping: from the start up to the end of the collision ring, the
 		// last region it uses. 32 MB instead of the 191 MB client.dll maps in the same process
 		constexpr std::uint64_t SERVER_VIEW_BYTES = proto::kOffCollisionRing + proto::kCollisionRingBytes;
@@ -115,6 +147,28 @@ namespace halfcraft
 		}
 	}
 
+	std::optional<LinkNames> process_link_names(const char* parameter)
+	{
+		const auto variable = environment_variable(widen(LINK_ID_VARIABLE));
+		const auto choice = choose_link_id(parameter, variable ? variable->c_str() : nullptr);
+		auto       names = chosen_link_names(choice);
+		if (!names && choice.id.empty()) {
+			log_error("%s has no link id after it: halfcraft stays off rather than take the default link, another pair's", choice.from);
+		} else if (!names) {
+			log_error("%s \"%s\" isn't a link id (1 to %zu of A-Z, a-z, 0-9, _ and -): halfcraft stays off rather than take the default link, another pair's",
+				choice.from, choice.id.c_str(), MAX_LINK_ID);
+		}
+		return names;
+	}
+
+	void pass_link_on(const LinkNames& names)
+	{
+		const std::wstring id = widen(names.id);
+		if (!::SetEnvironmentVariableW(widen(LINK_ID_VARIABLE).c_str(), names.id.empty() ? nullptr : id.c_str()) && !names.id.empty()) {
+			log_warning("couldn't set %s for what this game starts (%lu): a minecraft it starts takes the default link", LINK_ID_VARIABLE, ::GetLastError());
+		}
+	}
+
 	Link::~Link()
 	{
 		if (base_) {
@@ -128,17 +182,17 @@ namespace halfcraft
 		}
 	}
 
-	bool Link::create()
+	bool Link::create(const LinkNames& names)
 	{
-		return map(true, proto::kMappingBytes);
+		return map(names, true, proto::kMappingBytes);
 	}
 
-	bool Link::attach()
+	bool Link::attach(const LinkNames& names)
 	{
-		return map(false, SERVER_VIEW_BYTES);
+		return map(names, false, SERVER_VIEW_BYTES);
 	}
 
-	bool Link::map(bool reset, std::uint64_t view_bytes)
+	bool Link::map(const LinkNames& names, bool reset, std::uint64_t view_bytes)
 	{
 		if (base_) {
 			return true;
@@ -146,11 +200,11 @@ namespace halfcraft
 		const auto          size = proto::kMappingBytes;
 		SECURITY_ATTRIBUTES access{ sizeof(access), shared_with_this_user(), FALSE };
 		mapping_ = ::CreateFileMappingW(INVALID_HANDLE_VALUE, access.lpSecurityDescriptor ? &access : nullptr, PAGE_READWRITE,
-			static_cast<DWORD>(size >> 32), static_cast<DWORD>(size & 0xFFFFFFFF), proto::kMappingName);
+			static_cast<DWORD>(size >> 32), static_cast<DWORD>(size & 0xFFFFFFFF), names.mapping.c_str());
 		const DWORD created = ::GetLastError();
 		if (reset && mapping_) {
 			// the host's frames, for minecraft to wait on (without it minecraft naps and polls instead)
-			frame_event_ = ::CreateEventW(access.lpSecurityDescriptor ? &access : nullptr, FALSE, FALSE, proto::kFrameEventName);
+			frame_event_ = ::CreateEventW(access.lpSecurityDescriptor ? &access : nullptr, FALSE, FALSE, names.frame_event.c_str());
 			if (!frame_event_) {
 				log_warning("CreateEvent for minecraft's frame pacing failed (%lu)", ::GetLastError());
 			}
@@ -173,9 +227,11 @@ namespace halfcraft
 			return false;
 		}
 		view_bytes_ = view_bytes;
+		// a named link's lines say which mapping it is (the default link's stay as they were)
+		const std::wstring which = names.id.empty() ? std::wstring() : L" for link " + widen(names.id) + L" (" + names.mapping + L")";
 		if (!reset) {
-			log_info("shared memory attached (%llu of %llu MB, %s)", static_cast<unsigned long long>(view_bytes >> 20),
-				static_cast<unsigned long long>(size >> 20), existed ? "existing" : "new");
+			log_info("shared memory attached (%llu of %llu MB, %s)%ls", static_cast<unsigned long long>(view_bytes >> 20),
+				static_cast<unsigned long long>(size >> 20), existed ? "existing" : "new", which.c_str());
 			return true;
 		}
 
@@ -206,7 +262,7 @@ namespace halfcraft
 		as_atomic(header->hostSession).store(static_cast<std::uint64_t>(now.QuadPart) | 1, std::memory_order_release);
 		as_atomic(header->magic).store(proto::kMagic, std::memory_order_release);
 
-		log_info("shared memory created (%llu MB, %s)", static_cast<unsigned long long>(size >> 20), existed ? "reused" : "new");
+		log_info("shared memory created (%llu MB, %s)%ls", static_cast<unsigned long long>(size >> 20), existed ? "reused" : "new", which.c_str());
 		return true;
 	}
 

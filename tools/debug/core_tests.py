@@ -21,15 +21,15 @@ RUN_SECONDS = 600
 
 
 def build() -> None:
-    """compiles the tests when they or the headers they take from core\\ changed since."""
-    sources = [SOURCE, *(REPO / "source/src/core").glob("hc_*.h")]
+    """compiles the tests when they or the headers they take from core\\ and protocol\\ changed since."""
+    sources = [SOURCE, *(REPO / "source/src/core").glob("hc_*.h"), REPO / "protocol/halfcraft_protocol.h"]
     if EXE.is_file() and all(source.stat().st_mtime <= EXE.stat().st_mtime for source in sources):
         return
     vs = visual_studio.installation("Microsoft.VisualStudio.Component.VC.Tools.x86.x64")
     if not vs:
         raise ToolError("visual studio with the c++ compiler not found")
     OUT.mkdir(parents=True, exist_ok=True)
-    cl = f'cl /nologo /O2 /W4 /WX /EHsc /std:c++17 /I "{REPO}\\source\\src" /Fo"{OUT}\\\\" /Fe"{EXE}" "{SOURCE}" || exit /b 1'
+    cl = f'cl /nologo /O2 /W4 /WX /EHsc /std:c++17 /I "{REPO}\\source\\src" /I "{REPO}\\protocol" /Fo"{OUT}\\\\" /Fe"{EXE}" "{SOURCE}" || exit /b 1'
     visual_studio.run_script(vs, OUT / "build.cmd", [cl], timeout=COMPILE_SECONDS, what="core_tests build")
 
 

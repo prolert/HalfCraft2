@@ -2,9 +2,11 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string_view>
 
 #include "halfcraft_protocol.h"
+#include "hc_link_names.h"
 
 // the shared-memory link to minecraft (protocol/halfcraft_protocol.h). the host (source) creates
 // the mapping, minecraft opens it.
@@ -16,10 +18,21 @@
 //                (HostDebugServer) (it also reads the header and both states)
 // only client.dll resets the mapping (create()); server.dll just attaches (attach()), and only to
 // what it uses: in half-life 2's 32-bit process both dlls share 2 GB of address space, and the
-// overlay and the render ring (159 MB of the mapping's 191) are the client's alone.
+// overlay and the render ring (159 MB of the mapping's 191) are the client's alone. both map the
+// link the process is on (process_link_names; core/hc_link_names.h says how its names go).
 
 namespace halfcraft
 {
+	/// the names of the link this process is on: -hc_link's id over HALFCRAFT_LINK's, else the default
+	/// link's (choose_link_id). an id given that isn't one is logged as an error.
+	/// @param parameter - -hc_link's value on source's command line: nullptr without -hc_link, "" when it has none
+	/// @return nullopt for an id that isn't one: no link then, never the default one (another pair's)
+	std::optional<LinkNames> process_link_names(const char* parameter);
+
+	/// sets HALFCRAFT_LINK in this process's environment to the link's id (takes it out for the default
+	/// link), so what the process starts from then on (prism, and the minecraft prism starts) inherits it
+	/// and takes the same link.
+	void pass_link_on(const LinkNames& names);
 
 	class Link
 	{
@@ -29,13 +42,14 @@ namespace halfcraft
 		Link(const Link&) = delete;
 		Link& operator=(const Link&) = delete;
 
-		/// creates (or reuses) the mapping and resets every region the host owns. client.dll only.
+		/// creates (or reuses) the link's mapping and frame event and resets every region the host owns.
+		/// client.dll only.
 		/// @return true when the mapping is usable
-		bool create();
+		bool create(const LinkNames& names);
 		/// maps the same memory without resetting anything, up to the end of the collision ring: the
 		/// overlay and the render ring stay unmapped. server.dll only.
 		/// @return true when the mapping is usable
-		bool               attach();
+		bool               attach(const LinkNames& names);
 		[[nodiscard]] bool valid() const { return base_ != nullptr; }
 
 		/// minecraft wrote its heartbeat within the last few seconds.
@@ -104,7 +118,7 @@ namespace halfcraft
 
 	private:
 		/// @param view_bytes - how much of the mapping, from its start, this process maps
-		bool map(bool reset, std::uint64_t view_bytes);
+		bool map(const LinkNames& names, bool reset, std::uint64_t view_bytes);
 		/// a ring minecraft writes: our consumer index catches up with its producer index.
 		void skip_pending(std::uint64_t head_offset, std::uint64_t tail_offset);
 		/// the view reaches up to end (server.dll's stops before the overlay).
@@ -117,7 +131,7 @@ namespace halfcraft
 		}
 
 		void*         mapping_{ nullptr };
-		void*         frame_event_{ nullptr };  // the host's: set after each HostState (proto::kFrameEventName)
+		void*         frame_event_{ nullptr };  // the host's: set after each HostState (LinkNames::frame_event)
 		std::uint8_t* base_{ nullptr };
 		std::uint64_t view_bytes_{ 0 };
 		std::uint32_t overlay_front_{ 2 };

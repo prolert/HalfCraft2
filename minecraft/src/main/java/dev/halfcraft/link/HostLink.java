@@ -15,7 +15,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * The Minecraft end of the shared-memory link. Half-Life owns the mapping; we open it when it
- * appears and treat it as gone when Half-Life's heartbeat stops.
+ * appears and treat it as gone when Half-Life's heartbeat stops. Which link is HALFCRAFT_LINK's
+ * (LinkNames): the default one without it.
  */
 public final class HostLink {
 	private static final int FILE_MAP_ALL_ACCESS = 0xF001F;
@@ -41,7 +42,9 @@ public final class HostLink {
 	private static final MethodHandle WAIT_FOR_SINGLE_OBJECT;
 	private static final int SYNCHRONIZE = 0x00100000;
 	private static MemorySegment runningMutex;
-	// Half-Life's frame event (Proto.FRAME_EVENT_NAME); null before it's open, or from a Half-Life without one
+	// the link this Minecraft is on (HALFCRAFT_LINK's); null for an id that isn't one: no Half-Life then, rather than another pair's
+	private static final LinkNames LINK = linkFromEnvironment();
+	// Half-Life's frame event (LINK.frameEvent()); null before it's open, or from a Half-Life without one
 	private static volatile MemorySegment frameEvent;
 	private static final MemorySegment QPC_OUT = Arena.global().allocate(JAVA_LONG);
 
@@ -61,6 +64,18 @@ public final class HostLink {
 		CREATE_MUTEX = linker.downcallHandle(k32.find("CreateMutexW").orElseThrow(), FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
 		OPEN_EVENT = linker.downcallHandle(k32.find("OpenEventW").orElseThrow(), FunctionDescriptor.of(ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
 		WAIT_FOR_SINGLE_OBJECT = linker.downcallHandle(k32.find("WaitForSingleObject").orElseThrow(), FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+	}
+
+	private static LinkNames linkFromEnvironment() {
+		String id = System.getenv(LinkNames.VARIABLE);
+		LinkNames link = LinkNames.of(id).orElse(null);
+		if (link == null) {
+			HalfCraft.LOG.error("HalfCraft: {} \"{}\" isn't a link id (1 to {} of A-Z, a-z, 0-9, _ and -): linking to no Half-Life rather than take the default link, another pair's",
+				LinkNames.VARIABLE, id, LinkNames.MAX_ID_LENGTH);
+		} else if (!link.id().isEmpty()) {
+			HalfCraft.LOG.info("HalfCraft: on link {} ({})", link.id(), link.mapping());
+		}
+		return link;
 	}
 
 	/**
@@ -86,7 +101,7 @@ public final class HostLink {
 			return;
 		}
 		try (Arena arena = Arena.ofConfined()) {
-			MemorySegment name = arena.allocateFrom(FRAME_EVENT_NAME, StandardCharsets.UTF_16LE);
+			MemorySegment name = arena.allocateFrom(LINK.frameEvent(), StandardCharsets.UTF_16LE);
 			MemorySegment handle = (MemorySegment) OPEN_EVENT.invokeExact(SYNCHRONIZE, 0, name);
 			if (handle.address() != 0) {
 				frameEvent = handle;
@@ -98,15 +113,15 @@ public final class HostLink {
 	}
 
 	/**
-	 * Holds a named mutex ("<link name>_minecraft") for as long as this Minecraft runs, so a launcher
-	 * knows not to start another one (even before the two games have linked up).
+	 * Holds the link's named mutex ("<its mapping>_minecraft") for as long as this Minecraft runs, so a
+	 * launcher knows not to start another one on it (even before the two games have linked up).
 	 */
 	public static synchronized void announceRunning() {
-		if (runningMutex != null) {
+		if (runningMutex != null || LINK == null) {
 			return;
 		}
 		try (Arena arena = Arena.ofConfined()) {
-			MemorySegment name = arena.allocateFrom(MAPPING_NAME + "_minecraft", StandardCharsets.UTF_16LE);
+			MemorySegment name = arena.allocateFrom(LINK.minecraftMutex(), StandardCharsets.UTF_16LE);
 			runningMutex = (MemorySegment) CREATE_MUTEX.invokeExact(MemorySegment.NULL, 0, name);
 		} catch (Throwable t) {
 			HalfCraft.LOG.warn("HalfCraft: couldn't create the running-Minecraft mutex", t);
@@ -169,12 +184,12 @@ public final class HostLink {
 			return;
 		}
 		long now = System.currentTimeMillis();
-		if (now - lastOpenAttempt < 1000) {
+		if (now - lastOpenAttempt < 1000 || LINK == null) {
 			return;
 		}
 		lastOpenAttempt = now;
 		try (Arena arena = Arena.ofConfined()) {
-			MemorySegment name = arena.allocateFrom(MAPPING_NAME, StandardCharsets.UTF_16LE);
+			MemorySegment name = arena.allocateFrom(LINK.mapping(), StandardCharsets.UTF_16LE);
 			MemorySegment handle = (MemorySegment) OPEN_FILE_MAPPING.invokeExact(OPEN_STATE, FILE_MAP_ALL_ACCESS, 0, name);
 			if (handle.address() == 0) {
 				// Say why, once per reason: 2 is "Half-Life hasn't made it yet" (normal while it loads),
@@ -206,7 +221,8 @@ public final class HostLink {
 			hostSession = (long) LONG.getAcquire(seg, OFF_HEADER + H_HOST_SESSION);
 			generation++;
 			shm = seg;
-			HalfCraft.LOG.info("HalfCraft: linked to Half-Life (pid {})", seg.get(JAVA_INT, OFF_HEADER + H_HOST_PID));
+			HalfCraft.LOG.info("HalfCraft: linked to Half-Life (pid {}){}", seg.get(JAVA_INT, OFF_HEADER + H_HOST_PID),
+				LINK.id().isEmpty() ? "" : " on link " + LINK.id() + " (" + LINK.mapping() + ")");
 		} catch (Throwable t) {
 			HalfCraft.LOG.error("HalfCraft: failed to open shared memory", t);
 		}

@@ -9,7 +9,7 @@ namespace halfcraft::proto
 {
 	// a hash of the layout below but its comments: the host writes it into the header, and Minecraft links only
 	// with a host built from the same schema
-	inline constexpr std::uint32_t kLayout = 0x9064AE03;
+	inline constexpr std::uint32_t kLayout = 0xA71B7E62;
 
 	// ---- where each part of the mapping is ----------------------------------------------------------
 	inline constexpr std::uint64_t kOffHeader = 0x00;
@@ -46,10 +46,13 @@ namespace halfcraft::proto
 	// creates the mapping; Minecraft opens it. Coordinates in this protocol are always Minecraft space
 	// (blocks, Y up, Z south) unless noted.
 	inline constexpr std::uint32_t kMagic = 0x464C4148;  // "HALF"
-	inline constexpr wchar_t       kMappingName[] = L"Local\\HalfCraft_v1";
-	// an auto-reset event the host sets after each frame's HostState: minecraft waits on it to draw once
-	// per host frame, asleep in between
-	inline constexpr wchar_t kFrameEventName[] = L"Local\\HalfCraft_v1_frame";
+	// the default link's mapping. a link id (HALFCRAFT_LINK on both sides, or source's -hc_link: 1-32 of A-Z
+	// a-z 0-9 _ -) gives a pair (a source game and its minecraft) a link of its own, <this>.<id>, so two pairs
+	// can run on one pc. a link's frame event is <its mapping>_frame, an auto-reset event the host sets after
+	// each frame's HostState: minecraft waits on it to draw once per host frame, asleep in between. minecraft
+	// holds a mutex <its mapping>_minecraft while it runs. core/hc_link_names.h, LinkNames.java and
+	// tools/halfcraft/link.py build the names
+	inline constexpr wchar_t kMappingName[] = L"Local\\HalfCraft_v1";
 
 	struct Header
 	{

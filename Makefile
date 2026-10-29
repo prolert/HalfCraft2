@@ -16,7 +16,7 @@
 #   make format                    clang-format the c++, ruff the python, eclipse's formatter the java; make lint: check
 #                                  (and that the protocol files are what the schema gives)
 #   make tidy                      clang-tidy over halfcraft's c++, both engines (after make build)
-#   make core-test                 the c++ core's own tests (tools\debug\core_tests.cpp): no sdk, no game
+#   make core-test                 the c++ core's own tests (tools\debug\core_tests.cpp), then the tools' (tool_tests.py): no game
 #
 # ENGINE: hl2 (half-life 2's own 32-bit engine), hl2dm (half-life 2: deathmatch's 64-bit one) or all
 # (default; `make run` takes hl2dm then). NOPROJECTS=1 skips vpc when no .vpc file changed.
@@ -86,6 +86,7 @@ tidy:
 
 core-test:
 	python tools/debug/core_tests.py
+	python tools/debug/tool_tests.py
 
 # build output that's safe to throw away: not build\game-* (saves and settings live there)
 clean:

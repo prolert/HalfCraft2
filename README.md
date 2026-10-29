@@ -164,8 +164,13 @@ Tests that change things play apart from your own games. `make test-start` sets 
 saves and `config.cfg` aside, then `make mc-test` starts a Minecraft dev client with a run folder
 (`minecraft/run/test`) and a world (`HalfCraftTest`) of its own; quit both games before
 `make test-stop` puts your saves and settings back (`tools/game/test_session.py`). Neither client starts
-while another Minecraft runs (they'd share the link), the test client only in a test session and
-yours only outside one. In the game, `hc_mc <command>` runs a Minecraft command as the player (the
+while another Minecraft runs on its link (they'd share it), the test client only in a test session and
+yours only outside one. Two pairs (a Half-Life and its Minecraft) run on one PC on links of their own:
+`HALFCRAFT_LINK=<id>` (1 to 32 of `A-Z`, `a-z`, `0-9`, `_` and `-`) for both games, or `-hc_link <id>` on
+Half-Life's command line, which wins over it and goes on to the Minecraft that Half-Life or `HalfCraft.exe`
+starts; the mapping is then `Local\HalfCraft_v1.<id>` (`source/src/core/hc_link_names.h`), and the tools read
+`HALFCRAFT_LINK` too. Without an id nothing changes; an id that isn't one keeps HalfCraft off rather than on
+another pair's link. A second Source game on the PC needs `-multirun`. In the game, `hc_mc <command>` runs a Minecraft command as the player (the
 answer goes to chat and to Minecraft's log). For scripts (`tools/game/hl2_command.py`; typed into the
 console they're let go as it closes), `hc_key <SDL scancode> [1|0] [seconds]`,
 `hc_hold <mouse button> <1|0> [seconds]` and `hc_use <1|0> [seconds]` press Minecraft's keys and

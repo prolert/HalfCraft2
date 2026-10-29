@@ -167,7 +167,8 @@ def processes(*names: str) -> list[Process]:
 
 
 def mutex_exists(name: str) -> bool:
-    """whether some process holds a named mutex (e.g. Local\\HalfCraft_v1_minecraft)."""
+    """whether some process holds a named mutex (e.g. a link's minecraft_mutex, Local\\HalfCraft_v1_minecraft for the
+    default link: link.py)."""
     handle = _kernel32.OpenMutexW(_SYNCHRONIZE, False, name)
     if handle:
         _kernel32.CloseHandle(handle)

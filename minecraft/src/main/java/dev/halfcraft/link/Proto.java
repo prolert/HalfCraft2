@@ -10,7 +10,7 @@ public final class Proto {
 
 	// a hash of the layout below but its comments: the host writes it into the header, and Minecraft links only
 	// with a host built from the same schema
-	public static final int LAYOUT = 0x9064AE03;
+	public static final int LAYOUT = 0xA71B7E62;
 
 	// ---- where each part of the mapping is
 	public static final long OFF_HEADER = 0x00;
@@ -47,10 +47,13 @@ public final class Proto {
 	// creates the mapping; Minecraft opens it. Coordinates in this protocol are always Minecraft space
 	// (blocks, Y up, Z south) unless noted.
 	public static final int MAGIC = 0x464C4148; // "HALF"
+	// the default link's mapping. a link id (HALFCRAFT_LINK on both sides, or source's -hc_link: 1-32 of A-Z
+	// a-z 0-9 _ -) gives a pair (a source game and its minecraft) a link of its own, <this>.<id>, so two pairs
+	// can run on one pc. a link's frame event is <its mapping>_frame, an auto-reset event the host sets after
+	// each frame's HostState: minecraft waits on it to draw once per host frame, asleep in between. minecraft
+	// holds a mutex <its mapping>_minecraft while it runs. core/hc_link_names.h, LinkNames.java and
+	// tools/halfcraft/link.py build the names
 	public static final String MAPPING_NAME = "Local\\HalfCraft_v1";
-	// an auto-reset event the host sets after each frame's HostState: minecraft waits on it to draw once
-	// per host frame, asleep in between
-	public static final String FRAME_EVENT_NAME = "Local\\HalfCraft_v1_frame";
 
 	// Header: offsets in it (in OFF_HEADER)
 	public static final long H_MAGIC = 0x00;

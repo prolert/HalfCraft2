@@ -11,11 +11,12 @@ python tools/game/test_session.py dev-client               the player's minecraf
 
 half-life's saves carry checkpoints of the player's minecraft world, and every changelevel autosaves over them,
 so a test never plays with them. the game folder itself stays: its strings file is named after it
-(resource\\<folder>_english.txt). only one minecraft can hold the link, so neither client starts next to another
-one. the test client only starts while every engine has a test session on, the player's only while none has,
+(resource\\<folder>_english.txt). only one minecraft can hold a link, so neither client starts next to another
+one on it. the test client only starts while every engine has a test session on, the player's only while none has,
 and a session neither starts nor stops while a minecraft runs: otherwise one world plays against the other's
 saves (it follows their loads and rolls back, and their autosaves land on the wrong saves). --engine all (the
-default) does both engines.
+default) does both engines. the link is HALFCRAFT_LINK's (tools/halfcraft/link.py): a client started with it set
+takes it, and only a minecraft on it counts.
 """
 
 import argparse
@@ -26,11 +27,12 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools\, where the halfcraft package is
-from halfcraft import REPO, ToolError, engines, folders, gradle, windows
+from halfcraft import REPO, ToolError, engines, folders, gradle, link, protocol, windows
 
 SESSIONS = REPO / "build/test-session"
-# what minecraft (HostLink.announceRunning) holds while it runs: the dev client, the test client or a release's
-MINECRAFT_MUTEX = "Local\\HalfCraft_v1_minecraft"
+# what minecraft (HostLink.announceRunning) holds while it runs on HALFCRAFT_LINK's link: the dev client, the test
+# client or a release's
+MINECRAFT_MUTEX = link.this_link(protocol.load()).minecraft_mutex
 PLAYER_LOG = REPO / "minecraft/run/logs/latest.log"
 TEST_LOG = REPO / "minecraft/run/test/logs/latest.log"
 

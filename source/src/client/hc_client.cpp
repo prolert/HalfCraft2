@@ -11,6 +11,7 @@
 #include "view.h"
 #include "view_shared.h"
 #include "ivrenderview.h"
+#include "tier0/icommandline.h"
 
 #include "tier0/valve_minmax_off.h"
 #include <algorithm>
@@ -178,7 +179,15 @@ namespace halfcraft
 				// starts somewhere new each run, so a minecraft still acknowledging the last run's
 				// teleport can't be taken for having arrived at this run's.
 				s.teleport_seq = static_cast<std::uint32_t>(qpc_now()) | 1u;
-				s.link_ready = s.link.create();
+				// the link: -hc_link's id or HALFCRAFT_LINK's (another pair's game on this pc has its own), passed
+				// on before anything starts minecraft (hc_minecraft.cpp), so the one this game starts takes it too.
+				// an id that isn't one leaves halfcraft off
+				const char* parameter = CommandLine()->FindParm(LINK_ID_PARAMETER) ? CommandLine()->ParmValue(LINK_ID_PARAMETER, "") : nullptr;
+				s.link_names = process_link_names(parameter);
+				if (s.link_names) {
+					pass_link_on(*s.link_names);
+					s.link_ready = s.link.create(*s.link_names);
+				}
 				return true;
 			}
 

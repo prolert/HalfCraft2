@@ -42,19 +42,26 @@ namespace halfcraft
 				}
 			}
 
-			void update(bool connected)
+			/// @param link - the link this game is on; nullptr for an id that isn't one: no minecraft is started then
+			void update(const LinkNames* link, bool connected)
 			{
 				const auto now = std::chrono::steady_clock::now();
 				if (bundle_.empty() || now < next_check_) {
 					return;
 				}
 				next_check_ = now + CHECK_INTERVAL;
+				if (!link) {
+					// one started now would take the default link, another pair's (the console says why)
+					failure_ = L"HalfCraft is off: its link id isn't one (see the console)";
+					state_ = State::kFailed;
+					return;
+				}
 				if (connected) {
 					state_ = State::kConnected;
 					came_up_ = true;
 					return;
 				}
-				if (prism::minecraft_running()) {
+				if (prism::minecraft_running(*link)) {
 					state_ = State::kLoading;  // or the last half-life's, on its way out
 					came_up_ = true;
 					return;
@@ -207,7 +214,7 @@ namespace halfcraft
 			void Update(float) override
 			{
 				auto& s = client_session();
-				g_keeper.update(s.link_ready && s.link.mc_alive());
+				g_keeper.update(s.link_names ? &*s.link_names : nullptr, s.link_ready && s.link.mc_alive());
 			}
 
 		private:

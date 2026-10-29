@@ -1,7 +1,16 @@
 """the running game's shared memory for the debug tools (tools\\debug), read-only: the mapping, laid out as
-protocol\\schema says, and what its collision ring still holds."""
+protocol\\schema says, and what its collision ring still holds. and which link that is: a link id (HALFCRAFT_LINK,
+which both games read too) gives a pair (a half-life and its minecraft) a link of its own, so two pairs can run on
+one pc:
+
+    no id    Local\\HalfCraft_v1      Local\\HalfCraft_v1_frame      Local\\HalfCraft_v1_minecraft
+    id b     Local\\HalfCraft_v1.b    Local\\HalfCraft_v1.b_frame    Local\\HalfCraft_v1.b_minecraft
+
+source/src/core/hc_link_names.h and minecraft's LinkNames.java build the same names (link_names here)."""
 
 import mmap
+import os
+import re
 import struct
 from dataclasses import dataclass
 
@@ -10,12 +19,54 @@ from halfcraft.protocol import Schema
 
 MESSAGE_HEADER = struct.Struct("<II")  # ColMsgHeader: type, payload bytes
 VOID_KIND_BYTES = 512  # kColVoid's u8 kind[512] after its ColRegion: a VoidKind for each block of the region's 8x8x8
+LINK_VARIABLE = "HALFCRAFT_LINK"  # the link id (source's -hc_link wins over it there)
+MAX_LINK_ID = 32
+_LINK_ID = re.compile(r"[A-Za-z0-9_-]{1,32}")
 
 
-def open_link(schema: Schema, name: str | None = None) -> mmap.mmap:
-    """the mapping (kMappingName, or `name`) read-only: an error when no game has it up, or one built from
-    another schema does."""
-    name = name or str(schema.constants["kMappingName"].value)
+@dataclass(frozen=True)
+class LinkNames:
+    """a link's shared objects: its mapping, the host's frame event and the mutex minecraft holds while it runs."""
+
+    id: str  # "" for the default link
+    mapping: str
+    frame_event: str
+    minecraft_mutex: str
+
+
+def valid_link_id(link_id: str) -> bool:
+    """1 to MAX_LINK_ID characters, each of A-Z, a-z, 0-9, _ and -."""
+    return _LINK_ID.fullmatch(link_id) is not None
+
+
+def link_names(default_mapping: str, link_id: str | None) -> LinkNames:
+    """the names of the link with this id ("" or None: the default link). a ToolError for an id that isn't one,
+    never the default link's names: those are another pair's.
+    default_mapping: the default link's mapping, the schema's kMappingName"""
+    if not link_id:
+        return LinkNames("", default_mapping, f"{default_mapping}_frame", f"{default_mapping}_minecraft")
+    if not valid_link_id(link_id):
+        raise ToolError(f"{link_id!r} isn't a link id (1 to {MAX_LINK_ID} of A-Z, a-z, 0-9, _ and -): give a good one, or none for the default link")
+    mapping = f"{default_mapping}.{link_id}"
+    return LinkNames(link_id, mapping, f"{mapping}_frame", f"{mapping}_minecraft")
+
+
+def this_link(schema: Schema, link_id: str | None = None) -> LinkNames:
+    """the link with this id, or HALFCRAFT_LINK's when None (the way both games read it: the default link when it's
+    unset or empty)."""
+    default = str(schema.constants["kMappingName"].value)
+    if link_id is not None:
+        return link_names(default, link_id)
+    try:
+        return link_names(default, os.environ.get(LINK_VARIABLE))
+    except ToolError as error:
+        raise ToolError(f"{LINK_VARIABLE}: {error}") from None
+
+
+def open_link(schema: Schema, link_id: str | None = None) -> mmap.mmap:
+    """the mapping of the link with this id (HALFCRAFT_LINK's when None) read-only: an error when no game has it
+    up, or one built from another schema does."""
+    name = this_link(schema, link_id).mapping
     try:
         # a name nobody holds gets a new, empty mapping: the magic tells
         link = mmap.mmap(-1, schema.mapping_bytes, tagname=name, access=mmap.ACCESS_READ)

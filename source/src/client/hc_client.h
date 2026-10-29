@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include "core/hc_link.h"
@@ -15,8 +16,9 @@ namespace halfcraft
 {
 	struct ClientSession
 	{
-		Link link;
-		bool link_ready = false;
+		std::optional<LinkNames> link_names;  // the link this game is on (process_link_names); none for an id that isn't one
+		Link                     link;
+		bool                     link_ready = false;
 
 		// minecraft, as of this frame
 		proto::McState mc{};

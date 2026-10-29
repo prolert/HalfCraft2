@@ -15,6 +15,8 @@
 #include <filesystem>
 #include <string>
 
+#include "hc_link_names.h"
+
 namespace halfcraft::prism
 {
 	/// the bundled minecraft beside a mod folder.
@@ -22,8 +24,9 @@ namespace halfcraft::prism
 	/// @return <release>/minecraft, or empty when there's no bundled prism (a development checkout)
 	std::filesystem::path find_bundle(const std::filesystem::path& game_dir);
 
-	/// a minecraft with the halfcraft mod is running (it holds a named mutex for as long as it runs).
-	bool minecraft_running();
+	/// a minecraft with the halfcraft mod is running on this link (it holds the link's minecraft_mutex for as
+	/// long as it runs).
+	bool minecraft_running(const LinkNames& link);
 
 	/// the bundle's own prism is running: downloading, asking for an account, or minding the game.
 	bool launcher_running(const std::filesystem::path& bundle);
@@ -33,6 +36,9 @@ namespace halfcraft::prism
 
 	/// starts the bundle's "HalfCraft" instance through prism, which signs in and downloads minecraft
 	/// and java itself the first time. that first start also puts prism's default settings in place.
+	/// prism gives the minecraft it starts its own environment (all but a few java variables), so
+	/// HALFCRAFT_LINK, as this process has it, says which link that minecraft takes. a prism of the same
+	/// bundle already running takes the launch over instead, and with it its own environment's link.
 	/// @param error - prism's exe and why it couldn't start it, when it couldn't (the callers say what failed)
 	/// @return false when prism couldn't be started
 	bool start(const std::filesystem::path& bundle, std::wstring& error);

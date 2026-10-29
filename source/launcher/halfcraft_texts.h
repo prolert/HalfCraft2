@@ -33,6 +33,11 @@ namespace halfcraft::launcher
 			L"В пути к папке HalfCraft есть символы, которые Half-Life 2 может не прочитать:\n{0}\n\n"
 			L"Если игра не запустится, перенесите папку HalfCraft в место с путём из одних латинских букв, например C:\\Games\\HalfCraft.\n\nВсё равно запустить?"
 		};
+		// {0}: -hc_link or HALFCRAFT_LINK, {1}: the id it gave
+		constexpr Text BAD_LINK_ID{
+			L"{0} \"{1}\" isn't a link id: that's 1 to 32 of A-Z, a-z, 0-9, _ and -. Fix it, or leave it out for the default link.",
+			L"{0} «{1}» — не идентификатор связи: это от 1 до 32 символов из A-Z, a-z, 0-9, _ и -. Исправьте его или уберите, чтобы играть на обычной связи."
+		};
 
 		constexpr Text NO_STEAM{
 			L"Steam isn't installed. HalfCraft needs Half-Life 2 from Steam.",
@@ -127,6 +132,7 @@ namespace halfcraft::launcher
 			&OUTSIDE_FOLDER,
 			&MISSING_FOLDER,
 			&ODD_PATH,
+			&BAD_LINK_ID,
 			&NO_STEAM,
 			&NO_HALF_LIFE_2,
 			&MISSING_EPISODES,

@@ -18,6 +18,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,7 @@
 #include "core/hc_dig_mask.h"
 #include "core/hc_dig_void.h"
 #include "core/hc_dug_cells.h"
+#include "core/hc_link_names.h"
 
 using namespace halfcraft;
 
@@ -1527,6 +1529,67 @@ namespace
 		CHECK(find("models/kleiner.mdl") == restore.end() && find("models/dog.mdl") == restore.end());
 		CHECK(plan_campaign_model_restore({}, old, plan, view).empty());
 	}
+
+	void test_valid_link_id()
+	{
+		CHECK(valid_link_id("b"));
+		CHECK(valid_link_id("AZaz09_-"));
+		CHECK(valid_link_id(std::string(MAX_LINK_ID, 'x')));
+		CHECK(!valid_link_id(""));
+		CHECK(!valid_link_id(std::string(MAX_LINK_ID + 1, 'x')));
+		// a mapping name's own characters, a space, a line break, utf-8's bytes and a nul aren't an id's
+		for (const char* bad : { "b c", "a.b", "a/b", "a\\b", "a:b", "*", "b\n", "\xC3\xA9", "\xEF\xBC\xA2" }) {
+			CHECK(!valid_link_id(bad));
+		}
+		CHECK(!valid_link_id(std::string_view("a\0b", 3)));
+	}
+
+	void test_link_names()
+	{
+		// no id: the names halfcraft always had
+		const auto plain = link_names("");
+		CHECK(plain && plain->id.empty());
+		CHECK(plain && plain->mapping == proto::kMappingName && plain->mapping == L"Local\\HalfCraft_v1");
+		CHECK(plain && plain->frame_event == L"Local\\HalfCraft_v1_frame");
+		CHECK(plain && plain->minecraft_mutex == L"Local\\HalfCraft_v1_minecraft");
+		// an id: the default mapping's name, a dot and the id, then the event and the mutex after it
+		const auto b = link_names("b");
+		CHECK(b && b->id == "b" && b->mapping == L"Local\\HalfCraft_v1.b");
+		CHECK(b && b->frame_event == L"Local\\HalfCraft_v1.b_frame" && b->minecraft_mutex == L"Local\\HalfCraft_v1.b_minecraft");
+		const std::string longest_id = "Pair_2-of-3_ABCDEFGHIJKLMNOPQRST";
+		const auto        longest = link_names(longest_id);
+		CHECK(longest_id.size() == MAX_LINK_ID && longest && longest->mapping == L"Local\\HalfCraft_v1.Pair_2-of-3_ABCDEFGHIJKLMNOPQRST");
+		// not an id: no names at all, never the default link's
+		CHECK(!link_names("b c"));
+		CHECK(!link_names(std::string(MAX_LINK_ID + 1, 'a')));
+		CHECK(!link_names("\xC3\xA9"));
+	}
+
+	void test_choose_link_id()
+	{
+		const auto from = [](const LinkChoice& choice) { return std::string(choice.from ? choice.from : "none"); };
+		// -hc_link wins over HALFCRAFT_LINK, which wins over the default link
+		CHECK(choose_link_id("a", "b").id == "a" && from(choose_link_id("a", "b")) == "-hc_link");
+		CHECK(choose_link_id(nullptr, "b").id == "b" && from(choose_link_id(nullptr, "b")) == "HALFCRAFT_LINK");
+		CHECK(choose_link_id(nullptr, nullptr).id.empty() && from(choose_link_id(nullptr, nullptr)) == "none");
+		// an empty HALFCRAFT_LINK is unset; an empty -hc_link is still given
+		CHECK(from(choose_link_id(nullptr, "")) == "none");
+		CHECK(choose_link_id("", "b").id.empty() && from(choose_link_id("", "b")) == "-hc_link");
+
+		// what a choice names: an id given that isn't one names nothing, not the default link
+		const auto none = chosen_link_names(choose_link_id(nullptr, nullptr));
+		CHECK(none && none->mapping == proto::kMappingName);
+		const auto empty = chosen_link_names(choose_link_id(nullptr, ""));
+		CHECK(empty && empty->id.empty());
+		const auto b = chosen_link_names(choose_link_id(nullptr, "b"));
+		CHECK(b && b->mapping == L"Local\\HalfCraft_v1.b");
+		CHECK(!chosen_link_names(choose_link_id("", "b")));
+		CHECK(!chosen_link_names(choose_link_id("b c", "b")));
+		CHECK(!chosen_link_names(choose_link_id(nullptr, "b c")));
+		// a good -hc_link over a bad HALFCRAFT_LINK (client.dll then sets the variable to it)
+		const auto over_bad = chosen_link_names(choose_link_id("a", "b c"));
+		CHECK(over_bad && over_bad->id == "a");
+	}
 }
 
 int run_tests()
@@ -1568,6 +1631,9 @@ int run_tests()
 	test_stale_campaign_models();
 	test_campaign_model_swap();
 	test_campaign_model_restore();
+	test_valid_link_id();
+	test_link_names();
+	test_choose_link_id();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;

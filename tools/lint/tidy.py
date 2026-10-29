@@ -52,10 +52,10 @@ PROJECTS = [
     Project("hl2", REPO / "source-sdk-2013-sp/sp/src/game/client/client_episodic.vcxproj", "Release|Win32", "i686-pc-windows-msvc"),
     Project("hl2", REPO / "source-sdk-2013-sp/sp/src/game/server/server_episodic.vcxproj", "Release|Win32", "i686-pc-windows-msvc"),
 ]
-# built by plain cl lines (tools/halfcraft/build.py, tools/debug/collision_check.py), 64-bit
+# built by plain cl lines (tools/halfcraft/build.py, tools/debug/collision_check.py and core_tests.py), 64-bit
 PLAIN = {
     "source/launcher/": ["/utf-8", "-DUNICODE", "-D_UNICODE", f"-I{REPO / 'source/src'}", f"-I{REPO / 'protocol'}"],
-    "tools/debug/": [f"-I{REPO / 'source/src'}"],
+    "tools/debug/": [f"-I{REPO / 'source/src'}", f"-I{REPO / 'protocol'}"],
 }
 # clang-tidy's own lines about the run, not about a finding
 NOISE = ("Suppressed ", "Use -header-filter", "Found compiler error")

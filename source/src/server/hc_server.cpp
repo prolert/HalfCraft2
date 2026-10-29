@@ -6,6 +6,7 @@
 #include "player.h"
 #include "in_buttons.h"
 #include "hl2/weapon_physcannon.h"
+#include "tier0/icommandline.h"
 
 #include "tier0/valve_minmax_off.h"
 #include <algorithm>
@@ -74,7 +75,10 @@ namespace halfcraft
 			{
 				set_log_sink(console_sink);
 				world_.set_dig(&dig_);
-				link_ready_ = link_.attach();
+				// the link client.dll creates: server.dll starts first, from the same command line and environment
+				const char* parameter = CommandLine()->FindParm(LINK_ID_PARAMETER) ? CommandLine()->ParmValue(LINK_ID_PARAMETER, "") : nullptr;
+				const auto  link = process_link_names(parameter);
+				link_ready_ = link && link_.attach(*link);
 				if (link_ready_) {
 					streamer_ = std::make_unique<CollisionStreamer>(link_);
 				}

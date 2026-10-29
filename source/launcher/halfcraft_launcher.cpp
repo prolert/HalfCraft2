@@ -8,6 +8,10 @@
 // with both games installed it asks which engine to run and keeps the answer in HalfCraft.ini beside
 // it. holding shift while starting it asks again.
 //
+// -hc_link <id> among them (or HALFCRAFT_LINK=<id>, which -hc_link wins over) puts the game and the minecraft
+// it starts on a link of their own (core/hc_link_names.h): the engine reads it as well, and minecraft gets
+// HALFCRAFT_LINK from prism, which gets it from here.
+//
 // it speaks english or russian (halfcraft_texts.h): HALFCRAFT_LANG=en or ru says which (the release's
 // "HalfCraft EN.cmd" and "HalfCraft RU.cmd" set it), else windows' display language does (russian for
 // russian, english for the rest). one argument is its own, not the engine's:
@@ -22,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,6 +54,7 @@ namespace
 	constexpr wchar_t SETTINGS_SECTION[] = L"launcher";
 	constexpr wchar_t SETTINGS_ENGINE[] = L"engine";
 	constexpr wchar_t LANGUAGE_VARIABLE[] = L"HALFCRAFT_LANG";
+	constexpr wchar_t LINK_VARIABLE[] = L"HALFCRAFT_LINK";  // halfcraft::LINK_ID_VARIABLE
 	constexpr wchar_t STEAM_KEY[] = L"Software\\Valve\\Steam";
 	constexpr wchar_t STEAM_PROCESS_KEY[] = L"Software\\Valve\\Steam\\ActiveProcess";
 	constexpr auto    STEAM_SIGN_IN_WAIT = 3min;
@@ -155,6 +161,48 @@ namespace
 		std::wstring wide(static_cast<std::size_t>(length), L'\0');
 		::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), length);
 		return wide;
+	}
+
+	/// -hc_link's value among the arguments (they go on to the engine), the way source reads it: nullopt
+	/// without -hc_link, empty when nothing follows it or another option does.
+	std::optional<std::string> link_parameter()
+	{
+		int                        count = 0;
+		LPWSTR*                    args = ::CommandLineToArgvW(::GetCommandLineW(), &count);
+		std::optional<std::string> value;
+		for (int i = 1; args && i < count && !value; ++i) {
+			if (_wcsicmp(args[i], L"-hc_link") == 0) {
+				const bool given = i + 1 < count && args[i + 1][0] != L'-' && args[i + 1][0] != L'+';
+				value = given ? narrow(args[i + 1]) : std::string();
+			}
+		}
+		::LocalFree(static_cast<HLOCAL>(args));
+		return value;
+	}
+
+	/// the link the game and its minecraft take (core/hc_link_names.h): -hc_link's id over HALFCRAFT_LINK's.
+	/// nullopt, said, for an id that isn't one: neither starts then, rather than take another pair's link.
+	std::optional<halfcraft::LinkNames> chosen_link()
+	{
+		const auto   parameter = link_parameter();
+		const DWORD  size = ::GetEnvironmentVariableW(LINK_VARIABLE, nullptr, 0);
+		std::wstring variable(size, L'\0');
+		const DWORD  length = size ? ::GetEnvironmentVariableW(LINK_VARIABLE, variable.data(), size) : 0;
+		variable.resize(length < size ? length : 0);
+		const std::string variable_text = narrow(variable);
+		const auto        choice = halfcraft::choose_link_id(parameter ? parameter->c_str() : nullptr, variable_text.c_str());
+		auto              link = halfcraft::chosen_link_names(choice);
+		if (!link) {
+			fail(say(texts::BAD_LINK_ID, { widen(choice.from), widen(choice.id) }));
+		}
+		return link;
+	}
+
+	/// HALFCRAFT_LINK set to the link's id (taken out for the default link), for prism and the minecraft it
+	/// starts to inherit. steam, which this may start too, never gets it: set only after steam is up.
+	void pass_link_on(const halfcraft::LinkNames& link)
+	{
+		::SetEnvironmentVariableW(LINK_VARIABLE, link.id.empty() ? nullptr : widen(link.id).c_str());
 	}
 
 	std::wstring registry_string(const wchar_t* key, const wchar_t* value)
@@ -280,8 +328,8 @@ namespace
 		return true;
 	}
 
-	/// minecraft running, or on its way with an account to play with.
-	bool ensure_minecraft(const fs::path& game)
+	/// minecraft running on the game's link, or on its way with an account to play with.
+	bool ensure_minecraft(const fs::path& game, const halfcraft::LinkNames& link)
 	{
 		const auto bundle = halfcraft::prism::find_bundle(game);
 		if (bundle.empty()) {
@@ -290,10 +338,10 @@ namespace
 		}
 		// one running now is most likely the last game's on its way out: wait for it, then start a new one
 		const auto give_up = std::chrono::steady_clock::now() + OLD_MINECRAFT_WAIT;
-		while (halfcraft::prism::minecraft_running() && std::chrono::steady_clock::now() < give_up) {
+		while (halfcraft::prism::minecraft_running(link) && std::chrono::steady_clock::now() < give_up) {
 			std::this_thread::sleep_for(500ms);
 		}
-		if (halfcraft::prism::minecraft_running()) {
+		if (halfcraft::prism::minecraft_running(link)) {
 			return true;  // it stays: it connects to this game instead
 		}
 		if (!halfcraft::prism::launcher_running(bundle)) {
@@ -307,8 +355,8 @@ namespace
 			}
 		}
 		// prism quits if the player closes it without signing in (or plays its demo, which is fine too)
-		while (!halfcraft::prism::signed_in(bundle) && !halfcraft::prism::minecraft_running()) {
-			if (!halfcraft::prism::launcher_running(bundle) && !halfcraft::prism::minecraft_running()) {
+		while (!halfcraft::prism::signed_in(bundle) && !halfcraft::prism::minecraft_running(link)) {
+			if (!halfcraft::prism::launcher_running(bundle) && !halfcraft::prism::minecraft_running(link)) {
 				tell(say(texts::NO_ACCOUNT), MB_ICONWARNING);
 				return false;
 			}
@@ -480,6 +528,10 @@ namespace
 		if (!fits_ansi_code_page(here.wstring()) && !ask(say(texts::ODD_PATH, { here.wstring() }))) {
 			return 1;
 		}
+		const auto link = chosen_link();
+		if (!link) {
+			return 1;
+		}
 
 		const std::wstring steam = registry_string(STEAM_KEY, L"SteamPath");
 		if (steam.empty()) {
@@ -514,7 +566,11 @@ namespace
 			return fail(say(texts::MISSING_ENGINE_EXE, { engine->app.name, engine->exe }));
 		}
 
-		if (!ensure_steam() || !ensure_minecraft(game)) {
+		if (!ensure_steam()) {
+			return 1;
+		}
+		pass_link_on(*link);
+		if (!ensure_minecraft(game, *link)) {
 			return 1;
 		}
 

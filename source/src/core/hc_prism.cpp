@@ -9,8 +9,6 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
-#include "halfcraft_protocol.h"
-
 namespace halfcraft::prism
 {
 	namespace
@@ -49,10 +47,9 @@ namespace halfcraft::prism
 		return !ec && std::filesystem::exists(launcher_exe(bundle), ec) ? bundle : std::filesystem::path{};
 	}
 
-	bool minecraft_running()
+	bool minecraft_running(const LinkNames& link)
 	{
-		const std::wstring name = std::wstring(proto::kMappingName) + L"_minecraft";
-		HANDLE             mutex = ::OpenMutexW(SYNCHRONIZE, FALSE, name.c_str());
+		HANDLE mutex = ::OpenMutexW(SYNCHRONIZE, FALSE, link.minecraft_mutex.c_str());
 		if (!mutex) {
 			return ::GetLastError() == ERROR_ACCESS_DENIED;  // there, just not ours to open
 		}

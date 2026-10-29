@@ -8,12 +8,12 @@ it can and writes two csv files:
 
 python tools/debug/trace_motion.py [seconds] [out_dir]
 
-then walk (uphill, in third person, ...) while it runs.
+then walk (uphill, in third person, ...) while it runs. it reads the link HALFCRAFT_LINK names, as the other debug
+tools do (tools/halfcraft/link.py).
 """
 
 import csv
 import ctypes
-import os
 import sys
 import time
 from pathlib import Path
@@ -49,7 +49,7 @@ def main() -> None:
     out = Path(sys.argv[2] if len(sys.argv) > 2 else ".")
     out.mkdir(parents=True, exist_ok=True)
     schema = protocol.load()
-    link = open_link(schema, os.environ.get("HALFCRAFT_LINK"))
+    link = open_link(schema)  # HALFCRAFT_LINK's link
     state, at = schema.structs["McState"], schema.regions["McState"].at
     frequency = qpc_frequency()
     start = qpc()

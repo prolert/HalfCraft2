@@ -10,10 +10,13 @@ type = "Header"
 
 [constants]
 kMagic = { type = "u32", value = 0x464C4148, hex = true, doc = '"HALF"' }
-kMappingName = { type = "wstring", value = 'Local\HalfCraft_v1' }
-kFrameEventName = { type = "wstring", value = 'Local\HalfCraft_v1_frame', doc = """
-an auto-reset event the host sets after each frame's HostState: minecraft waits on it to draw once
-per host frame, asleep in between""" }
+kMappingName = { type = "wstring", value = 'Local\HalfCraft_v1', doc = """
+the default link's mapping. a link id (HALFCRAFT_LINK on both sides, or source's -hc_link: 1-32 of A-Z
+a-z 0-9 _ -) gives a pair (a source game and its minecraft) a link of its own, <this>.<id>, so two pairs
+can run on one pc. a link's frame event is <its mapping>_frame, an auto-reset event the host sets after
+each frame's HostState: minecraft waits on it to draw once per host frame, asleep in between. minecraft
+holds a mutex <its mapping>_minecraft while it runs. core/hc_link_names.h, LinkNames.java and
+tools/halfcraft/link.py build the names""" }
 
 [structs.Header]
 size = 0x28
