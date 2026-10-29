@@ -364,6 +364,29 @@ index fb59bca9..bc4ff2e8 100644
  
  	CBoneCache *pcache = Studio_GetBoneCache( m_boneCacheHandle );
  	int boneMask = BONE_USED_BY_HITBOX | BONE_USED_BY_ATTACHMENT;
+diff --git a/src/game/server/hl2/hl2_client.cpp b/src/game/server/hl2/hl2_client.cpp
+index 6125de82..de3422bf 100644
+--- a/src/game/server/hl2/hl2_client.cpp
++++ b/src/game/server/hl2/hl2_client.cpp
+@@ -26,6 +26,8 @@
+ 
+ #include "tier0/vprof.h"
+ 
++#include "shared/hc_hooks.h"
++
+ // memdbgon must be the last include file in a .cpp file!!!
+ #include "tier0/memdbgon.h"
+ 
+@@ -136,6 +138,9 @@ void respawn( CBaseEntity *pEdict, bool fCopyCorpse )
+ 
+ 		// respawn player
+ 		pEdict->Spawn();
++
++		// halfcraft: a killed player is non-solid (CBasePlayer::Event_Killed) and Spawn() keeps it so
++		halfcraft::server_player_respawned( ToBasePlayer( pEdict ) );
+ 	}
+ 	else
+ 	{       // restart the entire server
 diff --git a/src/game/server/hl2/hl2_player.cpp b/src/game/server/hl2/hl2_player.cpp
 index 7b2d595e..cbafb503 100644
 --- a/src/game/server/hl2/hl2_player.cpp

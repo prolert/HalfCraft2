@@ -164,5 +164,10 @@ namespace halfcraft
 	/// hands the player's own edict in): the cells dug near the player (server/hc_dig.h) add the rooms behind
 	/// them, so their npcs and props come to the client too.
 	void server_add_dig_pvs(CBasePlayer* player);
+
+	/// respawn() (hl2_client.cpp), right after a dead player's Spawn() in a game for more than one (deathmatch
+	/// or coop; singleplayer reloads instead): CBasePlayer::Event_Killed left the player non-solid, and Spawn()
+	/// doesn't clear that. makes the player solid again, so it blocks the others and touches triggers (hc_coop.cpp).
+	void server_player_respawned(CBasePlayer* player);
 #endif
 }
