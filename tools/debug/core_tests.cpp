@@ -25,6 +25,7 @@
 #include "core/hc_bsp_tree.h"
 #include "core/hc_campaign_models.h"
 #include "core/hc_collision_shapes.h"
+#include "core/hc_coop.h"
 #include "core/hc_dig_material.h"
 #include "core/hc_dig_clip.h"
 #include "core/hc_dig_mask.h"
@@ -1590,6 +1591,24 @@ namespace
 		const auto over_bad = chosen_link_names(choose_link_id("a", "b c"));
 		CHECK(over_bad && over_bad->id == "a");
 	}
+
+	void test_is_map_name_takes_map_names_only()
+	{
+		CHECK(is_map_name("d1_trainstation_02"));
+		CHECK(!is_map_name(""));
+		CHECK(!is_map_name("d1 trainstation"));
+		CHECK(!is_map_name("x;quit"));
+		CHECK(is_map_name(std::string(64, 'a')));
+		CHECK(!is_map_name(std::string(65, 'a')));
+	}
+
+	void test_host_commands_set_up_a_two_slot_lan_server()
+	{
+		// the wait lets the game there is shut down before maxplayers, which the engine refuses while a server runs
+		CHECK(host_commands("d1_trainstation_02", false) == "disconnect; wait; maxplayers 2; sv_lan 1; coop 0; map d1_trainstation_02");
+		CHECK(host_commands("d1_trainstation_02", true) == "disconnect; wait; maxplayers 2; sv_lan 0; coop 0; map d1_trainstation_02");
+		CHECK(host_commands("x;quit", false).empty());
+	}
 }
 
 int run_tests()
@@ -1634,6 +1653,8 @@ int run_tests()
 	test_valid_link_id();
 	test_link_names();
 	test_choose_link_id();
+	test_is_map_name_takes_map_names_only();
+	test_host_commands_set_up_a_two_slot_lan_server();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;
