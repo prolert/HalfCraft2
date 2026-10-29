@@ -37,7 +37,9 @@ same with Skyrim and Minecraft.
 2. Unpack it anywhere, for example `C:\Games\HalfCraft`. A path with Latin letters only is safest.
 3. Run `HalfCraft EN.cmd`, or `HalfCraft RU.cmd` for Russian.
    - If Windows warns about an unknown publisher, click **More info**, then **Run anyway**.
-   - If you have Half-Life 2: Deathmatch, HalfCraft asks which engine to use. Pick Deathmatch to dig.
+   - If you have Half-Life 2: Deathmatch, HalfCraft runs on its engine: digging works only there. To play on
+     Half-Life 2's own engine, hold Shift while starting `HalfCraft.exe`, or run `HalfCraft.exe --engine hl2`.
+   - If you don't have it, HalfCraft offers to open Steam to get it. Say no to play on Half-Life 2's engine.
 4. The first time, Prism Launcher opens: sign in with your Microsoft account. After that it stays signed in.
 5. Wait for Minecraft to download and connect. The line at the top of the screen shows progress. Then start a
    New Game or load a save.

@@ -72,7 +72,28 @@ namespace halfcraft::launcher
 			L"Вход в Steam не выполнен. Войдите в аккаунт и снова запустите HalfCraft."
 		};
 
-		// the engine question: a command link for each (its first line, then a note under it)
+		// {0}: what followed --engine
+		constexpr Text UNKNOWN_ENGINE{
+			L"--engine \"{0}\" isn't an engine HalfCraft runs on. Use --engine hl2dm (Half-Life 2: Deathmatch's 64-bit engine) "
+			L"or --engine hl2 (Half-Life 2's own 32-bit engine).",
+			L"--engine «{0}» — такого движка нет. Укажите --engine hl2dm (64-битный движок Half-Life 2: Deathmatch) "
+			L"или --engine hl2 (32-битный движок самой Half-Life 2)."
+		};
+		constexpr Text GET_DEATHMATCH{
+			L"HalfCraft runs on Half-Life 2: Deathmatch's engine (only there can you dig through Half-Life's walls), "
+			L"and Half-Life 2: Deathmatch isn't installed.\n\n"
+			L"Open Steam to get it? If you own it, Steam installs it; if not, Steam opens its store page. Then start HalfCraft again.\n\n"
+			L"Otherwise HalfCraft starts on Half-Life 2's own engine, where you can't dig, and doesn't ask again. "
+			L"Hold Shift while starting HalfCraft to be asked again.",
+			L"HalfCraft работает на движке Half-Life 2: Deathmatch (только на нём можно копать стены Half-Life), "
+			L"а Half-Life 2: Deathmatch не установлена.\n\n"
+			L"Открыть Steam, чтобы получить её? Если игра у вас есть, Steam её установит, а если нет — откроет её страницу в магазине. "
+			L"Потом снова запустите HalfCraft.\n\n"
+			L"Иначе HalfCraft запустится на движке самой Half-Life 2, где копать нельзя, и больше не будет об этом спрашивать. "
+			L"Чтобы он спросил снова, держите Shift при запуске HalfCraft."
+		};
+
+		// the engine question (shift): a command link for each (its first line, then a note under it)
 		constexpr Text HL2DM_CHOICE{
 			L"Half-Life 2: Deathmatch (64-bit engine, more memory)\nRecommended: digging through Half-Life's walls works only on this engine.",
 			L"Half-Life 2: Deathmatch (64-битный движок, больше памяти)\nРекомендуется: копать стены Half-Life можно только на нём."
@@ -89,19 +110,10 @@ namespace halfcraft::launcher
 			L"Each engine keeps its own saves.",
 			L"У каждого движка свои сохранения."
 		};
-		constexpr Text REMEMBER_ENGINE{
-			L"Remember my choice (hold Shift while starting HalfCraft to choose again)",
-			L"Запомнить выбор (чтобы выбрать заново, держите Shift при запуске HalfCraft)"
-		};
 		// {0}: the error code
 		constexpr Text ASK_ENGINE_FAILED{
 			L"Couldn't ask which engine to run (error {0}).",
 			L"Не удалось показать выбор движка (ошибка {0})."
-		};
-		// {0}: HalfCraft.ini, {1}: the error code
-		constexpr Text ENGINE_NOT_KEPT{
-			L"Couldn't save your choice in {0} (error {1}), so HalfCraft asks again next time.",
-			L"Не удалось сохранить выбор в {0} (ошибка {1}), поэтому в следующий раз HalfCraft спросит снова."
 		};
 
 		constexpr Text FIRST_START{
@@ -140,13 +152,13 @@ namespace halfcraft::launcher
 			&MISSING_ENGINE_EXE,
 			&STEAM_WONT_START,
 			&STEAM_SIGNED_OUT,
+			&UNKNOWN_ENGINE,
+			&GET_DEATHMATCH,
 			&HL2DM_CHOICE,
 			&HL2_CHOICE,
 			&WHICH_ENGINE,
 			&ENGINE_SAVES,
-			&REMEMBER_ENGINE,
 			&ASK_ENGINE_FAILED,
-			&ENGINE_NOT_KEPT,
 			&FIRST_START,
 			&MINECRAFT_WONT_START,
 			&NO_ACCOUNT,

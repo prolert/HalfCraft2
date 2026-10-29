@@ -29,9 +29,11 @@ PLAY
 2. Start HalfCraft.exe. It speaks Windows' language (Russian on a Russian Windows, English
    otherwise); HalfCraft EN.cmd starts it in English, HalfCraft RU.cmd in Russian. Windows may warn
    about an unknown publisher: click More info, then Run anyway (or just Run).
-   If you have Half-Life 2: Deathmatch too, HalfCraft asks which engine to run (Deathmatch's by
-   default: only it digs through Half-Life's walls) and can remember your choice. To choose
-   again, hold Shift while starting it until the question appears.
+   If you have Half-Life 2: Deathmatch, HalfCraft runs on its engine: only it digs through
+   Half-Life's walls. To play on Half-Life 2's own engine, hold Shift while starting
+   HalfCraft.exe until the question appears, or run HalfCraft.exe --engine hl2.
+   If you don't have it, HalfCraft offers to open Steam to get it; say no to play on
+   Half-Life 2's engine.
 3. The first time, Prism Launcher opens: sign in with your Microsoft account. Half-Life 2 starts
    once you're signed in. Minecraft downloads (a few minutes the first time) and joins by itself;
    a line at the top of the screen says how far along it is.

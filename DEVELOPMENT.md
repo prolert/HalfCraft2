@@ -127,8 +127,10 @@ make package                 # builds both halves -> dist/HalfCraft-<version>.zi
 The zip's `HalfCraft` folder holds `HalfCraft.exe`, `HalfCraft EN.cmd` and `HalfCraft RU.cmd`, the two
 game folders (`game-hl2/`, `game-hl2dm/`) and a portable Prism Launcher with the HalfCraft instance
 (`minecraft/`); `package/README.txt` and `package/README_RU.txt` are what players read, in English and
-Russian. `HalfCraft.exe` checks Steam has Half-Life 2, asks which engine to run when Half-Life 2:
-Deathmatch is installed too (and remembers it; Shift asks again), starts Minecraft through Prism (the
+Russian. `HalfCraft.exe` checks Steam has Half-Life 2, runs Half-Life 2: Deathmatch's engine whenever
+it is installed (Shift asks which, for that start only; `--engine hl2dm|hl2`, its own argument, picks one
+without asking, and the `.cmd` files give `--engine hl2dm`), offers Steam's install of Deathmatch when it
+isn't (a no plays on `hl2` and is kept in `HalfCraft.ini` until Shift), starts Minecraft through Prism (the
 first time it waits for the Microsoft sign-in), then the engine on its game folder. It speaks English
 or Russian (`source/launcher/halfcraft_texts.h`): `HALFCRAFT_LANG=en` or `ru` says which, and the two
 `.cmd` files set it and pass their arguments on; without it, Windows' display language decides (Russian

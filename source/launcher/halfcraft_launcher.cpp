@@ -1,12 +1,18 @@
 // HalfCraft.exe, the one click. finds half-life 2 in steam (and half-life 2: deathmatch, whose 64-bit
-// engine it can run instead of half-life 2's own 32-bit one), starts the bundled minecraft (the first
-// time it waits until the player has signed in to it), then the engine on its mod folder beside it.
-// extra arguments go to the engine:
+// engine it runs instead of half-life 2's own 32-bit one whenever it's installed: digging through
+// half-life's walls works only there), starts the bundled minecraft (the first time it waits until the
+// player has signed in to it), then the engine on its mod folder beside it. extra arguments go to the
+// engine:
 //
 //   HalfCraft.exe -windowed -w 1280 -h 720 +map d1_canals_01
 //
-// with both games installed it asks which engine to run and keeps the answer in HalfCraft.ini beside
-// it. holding shift while starting it asks again.
+// with both games installed it asks nothing. holding shift while starting it asks which engine to run,
+// deathmatch's preselected, for that start only (the engine= an older HalfCraft.exe kept in HalfCraft.ini
+// is ignored). without deathmatch it offers to open steam for it (steam://install/320: steam installs an
+// owned app and shows the store page of one that isn't), and starts nothing then; a player who says no
+// plays on half-life 2's engine and isn't asked again (HalfCraft.ini's deathmatch_declined) until they
+// hold shift while starting it. for tests only, HALFCRAFT_TEST_NO_DEATHMATCH=1 makes it take deathmatch
+// for not installed, so that offer can be tried without uninstalling anything.
 //
 // -hc_link <id> among them (or HALFCRAFT_LINK=<id>, which -hc_link wins over) puts the game and the minecraft
 // it starts on a link of their own (core/hc_link_names.h): the engine reads it as well, and minecraft gets
@@ -14,8 +20,13 @@
 //
 // it speaks english or russian (halfcraft_texts.h): HALFCRAFT_LANG=en or ru says which (the release's
 // "HalfCraft EN.cmd" and "HalfCraft RU.cmd" set it), else windows' display language does (russian for
-// russian, english for the rest). one argument is its own, not the engine's:
+// russian, english for the rest). two arguments are its own, not the engine's:
 //
+//   HalfCraft.exe --engine hl2dm|hl2  that engine, with no question even with shift: hl2dm is deathmatch's,
+//                                     hl2 half-life 2's own (which never offers deathmatch). hl2dm without
+//                                     deathmatch is half-life 2's after the offer. the last one given wins:
+//                                     the .cmd files give --engine hl2dm, and their own arguments come after
+//                                     it. any other value says so and starts nothing
 //   HalfCraft.exe --strings <file>    every text it can show, in its language, into <file> (utf-8); starts nothing
 //
 // it expects the release layout (core/hc_prism.h): game-hl2/, game-hl2dm/ and minecraft/ next to it.
@@ -52,7 +63,9 @@ namespace
 	constexpr wchar_t TITLE[] = L"HalfCraft";
 	constexpr wchar_t SETTINGS_FILE[] = L"HalfCraft.ini";
 	constexpr wchar_t SETTINGS_SECTION[] = L"launcher";
-	constexpr wchar_t SETTINGS_ENGINE[] = L"engine";
+	constexpr wchar_t ENGINE_ARGUMENT[] = L"--engine";
+	constexpr wchar_t STRINGS_ARGUMENT[] = L"--strings";
+	constexpr wchar_t NO_DEATHMATCH_VARIABLE[] = L"HALFCRAFT_TEST_NO_DEATHMATCH";  // tests only: deathmatch counts as not installed
 	constexpr wchar_t LANGUAGE_VARIABLE[] = L"HALFCRAFT_LANG";
 	constexpr wchar_t LINK_VARIABLE[] = L"HALFCRAFT_LINK";  // halfcraft::LINK_ID_VARIABLE
 	constexpr wchar_t STEAM_KEY[] = L"Software\\Valve\\Steam";
@@ -70,22 +83,24 @@ namespace
 	// they come with half-life 2 and install into its folder; their chapters need them
 	constexpr SteamApp EPISODES[]{ { 380, L"Half-Life 2: Episode One" }, { 420, L"Half-Life 2: Episode Two" } };
 	constexpr wchar_t  SETTINGS_EPISODES_DECLINED[] = L"episodes_declined";
+	constexpr wchar_t  SETTINGS_DEATHMATCH_DECLINED[] = L"deathmatch_declined";  // steam's install of deathmatch, said no to
 
 	/// a source engine halfcraft runs on. the release has a mod folder for each: game-<id>.
 	struct Engine
 	{
-		const wchar_t* id;      // its name in HalfCraft.ini and in its mod folder's
+		const wchar_t* id;      // its name after --engine and in its mod folder's
 		SteamApp       app;     // the game it comes with
 		const wchar_t* exe;     // in that game's folder
 		Text           choice;  // what the player picks it by
 	};
-	// the engine question lists them in this order and picks the first unless the player chose another before.
-	// deathmatch's goes first: it's the one with the shader dll that digs half-life's walls (and 64-bit, more
+	// the engine question (shift) lists them in this order and preselects the first. deathmatch's goes first and
+	// runs whenever it's installed: it's the one with the shader dll that digs half-life's walls (and 64-bit, more
 	// memory). half-life 2's is always there: half-life 2 is the one game halfcraft always needs (its content)
 	constexpr Engine ENGINES[]{
 		{ L"hl2dm", DEATHMATCH, L"hl2mp_win64.exe", texts::HL2DM_CHOICE },
 		{ L"hl2", HALF_LIFE_2, L"hl2.exe", texts::HL2_CHOICE },
 	};
+	constexpr const Engine* DEATHMATCH_ENGINE = &ENGINES[0];
 
 	bool russian = false;  // the player's language (speaks_russian), set before anything is said
 
@@ -161,6 +176,57 @@ namespace
 		std::wstring wide(static_cast<std::size_t>(length), L'\0');
 		::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), length);
 		return wide;
+	}
+
+	/// HalfCraft.exe's arguments, its own --engine <id>s taken out of the ones that go on to the engine.
+	struct Arguments
+	{
+		std::vector<std::wstring> engines;     // each --engine's id in order, "" for one with nothing after it
+		std::vector<std::wstring> others;      // the rest, their quotes taken out
+		std::wstring              for_engine;  // the rest as written
+	};
+
+	/// the command line's arguments (PathGetArgsW's), split at spaces and tabs outside "quotes". what goes on to
+	/// the engine is the line itself with each --engine and the argument after it cut out.
+	Arguments read_arguments()
+	{
+		const std::wstring line = ::PathGetArgsW(::GetCommandLineW());
+		const auto         blank = [&](std::size_t at) { return line[at] == L' ' || line[at] == L'\t'; };
+		Arguments          arguments;
+		std::size_t        kept = 0;  // where the line's next stretch for the engine starts
+		bool               engine_next = false;
+		for (std::size_t at = 0; at < line.size();) {
+			if (blank(at)) {
+				++at;
+				continue;
+			}
+			const std::size_t begin = at;
+			std::wstring      text;
+			for (bool quoted = false; at < line.size() && (quoted || !blank(at)); ++at) {
+				if (line[at] == L'"') {
+					quoted = !quoted;
+				} else {
+					text += line[at];
+				}
+			}
+			if (engine_next) {
+				arguments.engines.back() = text;
+				engine_next = false;
+				kept = at;
+			} else if (text == ENGINE_ARGUMENT) {
+				arguments.for_engine += line.substr(kept, begin - kept);
+				arguments.engines.emplace_back();
+				engine_next = true;
+				kept = at;
+			} else {
+				arguments.others.push_back(text);
+			}
+		}
+		arguments.for_engine += line.substr(kept);
+		const auto first = arguments.for_engine.find_first_not_of(L" \t");
+		const auto last = arguments.for_engine.find_last_not_of(L" \t");
+		arguments.for_engine = first == std::wstring::npos ? std::wstring() : arguments.for_engine.substr(first, last - first + 1);
+		return arguments;
 	}
 
 	/// -hc_link's value among the arguments (they go on to the engine), the way source reads it: nullopt
@@ -390,33 +456,33 @@ namespace
 		return fs::exists(dir / L"gameinfo.txt", ec);
 	}
 
-	/// the engines whose game steam has installed, in ENGINES' order.
+	/// the engines whose game steam has installed, in ENGINES' order. HALFCRAFT_TEST_NO_DEATHMATCH=1 leaves
+	/// deathmatch's out, for tests of the offer to get it.
 	std::vector<const Engine*> installed_engines(const std::vector<fs::path>& libraries)
 	{
+		wchar_t    test[2]{};
+		const bool no_deathmatch = ::GetEnvironmentVariableW(NO_DEATHMATCH_VARIABLE, test, static_cast<DWORD>(std::size(test))) == 1 && test[0] == L'1';
+
 		std::vector<const Engine*> installed;
 		for (const auto& engine : ENGINES) {
-			if (!app_dir(libraries, engine.app).empty()) {
+			if ((!no_deathmatch || &engine != DEATHMATCH_ENGINE) && !app_dir(libraries, engine.app).empty()) {
 				installed.push_back(&engine);
 			}
 		}
 		return installed;
 	}
 
-	/// the engine HalfCraft.ini says to run without asking, or nullptr.
-	const Engine* remembered_engine(const fs::path& settings)
+	/// the engine with this id, any case (--engine's), or nullptr.
+	const Engine* engine_named(const std::wstring& id)
 	{
-		wchar_t id[32];
-		::GetPrivateProfileStringW(SETTINGS_SECTION, SETTINGS_ENGINE, L"", id, static_cast<DWORD>(std::size(id)), settings.c_str());
-		const auto found = std::find_if(std::begin(ENGINES), std::end(ENGINES), [&](const Engine& engine) { return _wcsicmp(id, engine.id) == 0; });
+		const auto found = std::find_if(std::begin(ENGINES), std::end(ENGINES), [&](const Engine& engine) { return _wcsicmp(id.c_str(), engine.id) == 0; });
 		return found == std::end(ENGINES) ? nullptr : found;
 	}
 
-	/// asks the player which engine to run.
+	/// asks the player which engine to run this time (shift held), ENGINES' first preselected.
 	/// @param engines - the installed ones to pick from
-	/// @param remembered - the last choice, preselected (or nullptr)
-	/// @param remember - set to whether the player wants this choice kept
 	/// @return the choice, or nullptr when the player closed the question or it couldn't be asked
-	const Engine* ask_engine(const std::vector<const Engine*>& engines, const Engine* remembered, bool& remember)
+	const Engine* ask_engine(const std::vector<const Engine*>& engines)
 	{
 		constexpr int FIRST_BUTTON = 100;  // clear of the common buttons' ids (IDCANCEL, ...)
 
@@ -428,68 +494,78 @@ namespace
 		}
 		const std::wstring question = say(texts::WHICH_ENGINE);
 		const std::wstring saves = say(texts::ENGINE_SAVES);
-		const std::wstring keep = say(texts::REMEMBER_ENGINE);
 
 		TASKDIALOGCONFIG               config{ sizeof(config) };
 		std::vector<TASKDIALOG_BUTTON> buttons;
-		config.nDefaultButton = FIRST_BUTTON;  // ENGINES' first, deathmatch's when it's there, unless one was remembered
+		buttons.reserve(engines.size());
 		for (std::size_t i = 0; i < engines.size(); ++i) {
-			const int id = FIRST_BUTTON + static_cast<int>(i);
-			buttons.push_back({ id, choices[i].c_str() });
-			if (engines[i] == remembered) {
-				config.nDefaultButton = id;
-			}
+			buttons.push_back({ FIRST_BUTTON + static_cast<int>(i), choices[i].c_str() });
 		}
-		config.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_VERIFICATION_FLAG_CHECKED;
+		config.nDefaultButton = FIRST_BUTTON;  // ENGINES' first: deathmatch's when it's there
+		config.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION;
 		config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
 		config.pszWindowTitle = TITLE;
 		config.pszMainInstruction = question.c_str();
 		config.pszContent = saves.c_str();
 		config.cButtons = static_cast<UINT>(buttons.size());
 		config.pButtons = buttons.data();
-		config.pszVerificationText = keep.c_str();
 
 		int           button = 0;
-		BOOL          checked = FALSE;
-		const HRESULT result = ::TaskDialogIndirect(&config, &button, nullptr, &checked);
+		const HRESULT result = ::TaskDialogIndirect(&config, &button, nullptr, nullptr);
 		if (FAILED(result)) {
 			wchar_t code[16];
 			std::swprintf(code, std::size(code), L"0x%08lX", static_cast<unsigned long>(result));
 			fail(say(texts::ASK_ENGINE_FAILED, { code }));
 			return nullptr;
 		}
-		remember = checked != FALSE;
 		const int picked = button - FIRST_BUTTON;
 		return picked >= 0 && picked < static_cast<int>(engines.size()) ? engines[static_cast<std::size_t>(picked)] : nullptr;
 	}
 
-	/// the engine to run: the only one installed, the one the player chose to keep, or a new choice
-	/// (kept in HalfCraft.ini if the player wants).
-	/// @param installed - the installed engines, at least one
-	/// @param settings - HalfCraft.ini
-	/// @param ask_again - the player held shift to choose again
-	/// @return nullptr when the player didn't choose
-	const Engine* choose_engine(const std::vector<const Engine*>& installed, const fs::path& settings, bool ask_again)
+	/// offers steam's install of half-life 2: deathmatch, whose engine halfcraft runs on (only it digs through
+	/// half-life's walls), unless the player said no before (HalfCraft.ini) and didn't hold shift this time.
+	/// steam installs an owned app and shows the store page of one that isn't. a no is kept.
+	/// @return whether steam was sent for it: then nothing starts, and the player starts HalfCraft again once it's in
+	bool get_deathmatch(const fs::path& settings, bool ask_again)
 	{
-		if (installed.size() < 2) {
-			// nothing to choose. a remembered choice stays for when the other game is back
-			return installed.empty() ? nullptr : installed.front();
+		const bool declined = ::GetPrivateProfileIntW(SETTINGS_SECTION, SETTINGS_DEATHMATCH_DECLINED, 0, settings.c_str()) != 0;
+		if (declined && !ask_again) {
+			return false;
 		}
-		const Engine* remembered = remembered_engine(settings);
-		if (!ask_again && std::find(installed.begin(), installed.end(), remembered) != installed.end()) {
-			return remembered;
+		if (!ask(say(texts::GET_DEATHMATCH))) {
+			::WritePrivateProfileStringW(SETTINGS_SECTION, SETTINGS_DEATHMATCH_DECLINED, L"1", settings.c_str());
+			return false;
 		}
-		bool          remember = true;
-		const Engine* chosen = ask_engine(installed, remembered, remember);
-		if (!chosen || (!remember && !remembered)) {
-			return chosen;
+		if (declined) {
+			// shift asked again and the player said yes: a start without it asks again too
+			::WritePrivateProfileStringW(SETTINGS_SECTION, SETTINGS_DEATHMATCH_DECLINED, nullptr, settings.c_str());
 		}
-		// a choice not to remember drops the old one too, so the next start asks again
-		if (!::WritePrivateProfileStringW(SETTINGS_SECTION, SETTINGS_ENGINE, remember ? chosen->id : nullptr, settings.c_str())) {
-			const DWORD error = ::GetLastError();
-			tell(say(texts::ENGINE_NOT_KEPT, { settings.wstring(), std::to_wstring(error) }), MB_ICONWARNING);
+		::ShellExecuteW(nullptr, L"open", (L"steam://install/" + std::to_wstring(DEATHMATCH.id)).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		return true;
+	}
+
+	/// the engine to run:
+	/// - --engine hl2's, half-life 2's, without a question or an offer;
+	/// - deathmatch's whenever it's installed. shift held without --engine asks which, for this start only;
+	/// - without deathmatch, half-life 2's once the player has said no to steam's install of it (get_deathmatch).
+	/// @param installed - the installed engines, at least one
+	/// @param wanted - --engine's, or nullptr
+	/// @param settings - HalfCraft.ini
+	/// @param shift_held - the player held shift while starting HalfCraft.exe
+	/// @return nullptr when nothing should start: the question was closed, or steam is getting deathmatch
+	const Engine* choose_engine(const std::vector<const Engine*>& installed, const Engine* wanted, const fs::path& settings, bool shift_held)
+	{
+		if (installed.empty()) {
+			return nullptr;
 		}
-		return chosen;
+		const auto is_installed = [&](const Engine* engine) { return std::find(installed.begin(), installed.end(), engine) != installed.end(); };
+		if (wanted && wanted != DEATHMATCH_ENGINE) {
+			return is_installed(wanted) ? wanted : installed.front();
+		}
+		if (!is_installed(DEATHMATCH_ENGINE)) {
+			return get_deathmatch(settings, shift_held) ? nullptr : installed.front();
+		}
+		return !wanted && shift_held && installed.size() > 1 ? ask_engine(installed) : DEATHMATCH_ENGINE;
 	}
 
 	/// offers steam's install of the episodes it hasn't installed: half-life 2's chapters play without them,
@@ -516,10 +592,19 @@ namespace
 		}
 	}
 
-	int run()
+	int run(const Arguments& arguments)
 	{
 		// read first thing: the player lets go of shift once HalfCraft has started
 		const bool shift_held = (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+
+		// the last --engine wins (the .cmd files' comes before the player's own). one that names no engine stops it
+		const Engine* wanted = nullptr;
+		for (const auto& id : arguments.engines) {
+			wanted = engine_named(id);
+			if (!wanted) {
+				return fail(say(texts::UNKNOWN_ENGINE, { id }));
+			}
+		}
 
 		const fs::path here = exe_dir();
 		if (std::none_of(std::begin(ENGINES), std::end(ENGINES), [&](const Engine& engine) { return is_game_dir(game_dir(here, engine)); })) {
@@ -552,7 +637,7 @@ namespace
 			}
 		}
 
-		const Engine* engine = choose_engine(installed_engines(libraries), here / SETTINGS_FILE, shift_held);
+		const Engine* engine = choose_engine(installed_engines(libraries), wanted, here / SETTINGS_FILE, shift_held);
 		if (!engine) {
 			return 1;
 		}
@@ -575,11 +660,10 @@ namespace
 		}
 
 		// -insecure: no vac. halfcraft's client.dll and server.dll are no game's own, so it never joins a vac-secured server
-		std::wstring   command = L"\"" + exe.wstring() + L"\" -game \"" + game.wstring() + L"\" -novid -condebug -insecure";
-		const wchar_t* extra = ::PathGetArgsW(::GetCommandLineW());
-		if (extra && *extra) {
+		std::wstring command = L"\"" + exe.wstring() + L"\" -game \"" + game.wstring() + L"\" -novid -condebug -insecure";
+		if (!arguments.for_engine.empty()) {
 			command += L" ";
-			command += extra;
+			command += arguments.for_engine;
 		}
 		STARTUPINFOW        startup{ sizeof(startup) };
 		PROCESS_INFORMATION process{};
@@ -615,13 +699,10 @@ namespace
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
 	russian = speaks_russian();
-	int            count = 0;
-	LPWSTR*        args = ::CommandLineToArgvW(::GetCommandLineW(), &count);
-	const bool     strings = args && count == 3 && std::wcscmp(args[1], L"--strings") == 0;
-	const fs::path file = strings ? fs::path(args[2]) : fs::path();
-	::LocalFree(static_cast<HLOCAL>(args));
-	if (strings) {
-		return write_strings(file);
+	const Arguments arguments = read_arguments();
+	// --strings <file> alone, but for any --engine (a .cmd file's)
+	if (arguments.others.size() == 2 && arguments.others[0] == STRINGS_ARGUMENT) {
+		return write_strings(arguments.others[1]);
 	}
 
 	// a second click while the first one waits (for steam, or the first sign-in) does nothing
@@ -630,7 +711,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 		::CloseHandle(single);
 		return 0;
 	}
-	const int result = run();
+	const int result = run(arguments);
 	if (single) {
 		::CloseHandle(single);
 	}
