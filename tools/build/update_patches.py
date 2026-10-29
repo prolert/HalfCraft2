@@ -24,8 +24,9 @@ def main() -> None:
             listed = commands.git("ls-files", "--others", "--exclude-standard", "-z", "--", *tree.added, repo=tree.path, what=f"git ls-files in {tree.folder}")
             if new := [file for file in listed.stdout.split("\0") if file]:
                 commands.git("add", "--intent-to-add", "--", *new, repo=tree.path, what=f"git add in {tree.folder}")
-        # --output keeps the bytes as git writes them; its line-ending notes are switched off
-        diff = ["-c", "core.safecrlf=false", "diff", "--binary", f"--output={tree.patch}", "--", *tree.edited()]
+        # --output keeps the bytes as git writes them; its line-ending notes are switched off. the index lines' hashes keep
+        # 8 digits: git shortens them to what the clone's object count needs, which rewrote every one when it changed
+        diff = ["-c", "core.safecrlf=false", "-c", "core.abbrev=8", "diff", "--binary", f"--output={tree.patch}", "--", *tree.edited()]
         commands.git(*diff, repo=tree.path, timeout=300, what=f"git diff in {tree.folder}")
         files = sum(1 for line in tree.patch.read_bytes().splitlines() if line.startswith(b"diff --git"))
         print(f"{tree.patch} ({files} files)")
