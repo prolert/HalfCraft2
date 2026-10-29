@@ -16,6 +16,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -1609,6 +1610,47 @@ namespace
 		CHECK(host_commands("d1_trainstation_02", true) == "disconnect; wait; maxplayers 2; sv_lan 0; coop 0; map d1_trainstation_02");
 		CHECK(host_commands("x;quit", false).empty());
 	}
+
+	void test_parse_host_args_takes_a_map_and_vpn()
+	{
+		using Args = std::vector<std::string_view>;
+		const auto is = [](const std::optional<HostRequest>& request, std::string_view map, bool vpn) {
+			return request && request->map == map && request->vpn == vpn;
+		};
+		constexpr std::string_view here = "d1_trainstation_02";
+		// a map, with vpn or without, on the menu or in a game
+		CHECK(is(parse_host_args(Args{ "d1_canals_01" }, here), "d1_canals_01", false));
+		CHECK(is(parse_host_args(Args{ "d1_canals_01" }, ""), "d1_canals_01", false));
+		CHECK(is(parse_host_args(Args{ "d1_canals_01", "vpn" }, ""), "d1_canals_01", true));
+		CHECK(is(parse_host_args(Args{ "d1_canals_01", "VPN" }, ""), "d1_canals_01", true));
+		// no map: the current one; a lone vpn is the flag
+		CHECK(is(parse_host_args(Args{}, here), here, false));
+		CHECK(is(parse_host_args(Args{ "vpn" }, here), here, true));
+		CHECK(is(parse_host_args(Args{ "Vpn" }, here), here, true));
+		// no map at the menu: the usage line
+		CHECK(!parse_host_args(Args{}, ""));
+		CHECK(!parse_host_args(Args{ "vpn" }, ""));
+		// a second argument that isn't vpn, one too many, vpn first: the usage line, never a guess at sv_lan
+		CHECK(!parse_host_args(Args{ "d1_canals_01", "vpm" }, here));
+		CHECK(!parse_host_args(Args{ "d1_canals_01", "vpn", "x" }, here));
+		CHECK(!parse_host_args(Args{ "vpn", "d1_canals_01" }, here));
+		CHECK(!parse_host_args(Args{ "vpn", "vpn" }, here));
+		// a name that isn't a map name, typed or the current level's; an empty one isn't "no map"
+		CHECK(!parse_host_args(Args{ "bad-name" }, here));
+		CHECK(!parse_host_args(Args{ "x;quit" }, here));
+		CHECK(!parse_host_args(Args{ "" }, here));
+		CHECK(!parse_host_args(Args{}, "custom-map"));
+		CHECK(!parse_host_args(Args{ "vpn" }, "custom-map"));
+	}
+
+	void test_map_file_and_host_slots()
+	{
+		CHECK(map_file("d1_trainstation_02") == "maps/d1_trainstation_02.bsp");
+		CHECK(HOST_SLOTS == 2);
+		CHECK(!hosted_level_has_room(1));
+		CHECK(hosted_level_has_room(2));
+		CHECK(hosted_level_has_room(32));
+	}
 }
 
 int run_tests()
@@ -1655,6 +1697,8 @@ int run_tests()
 	test_choose_link_id();
 	test_is_map_name_takes_map_names_only();
 	test_host_commands_set_up_a_two_slot_lan_server();
+	test_parse_host_args_takes_a_map_and_vpn();
+	test_map_file_and_host_slots();
 	if (failed == 0) {
 		std::printf("core_tests: %d checks passed\n", checks);
 		return 0;

@@ -7,7 +7,9 @@ class CBasePlayer;
 
 namespace halfcraft
 {
-	/// the host's player: entity 1. nullptr on a dedicated server (nobody plays in it) or before the host spawned.
+	/// the host's player: entity 1. nullptr on a dedicated server (nobody plays in it), and while slot 1 has no player
+	/// entity (no game, or before the engine puts the host's client in the server). as connected_player(1) under these
+	/// rules (see there).
 	CBasePlayer* host_player();
 
 	/// the player is the host's (host_player()). false for nullptr.
@@ -16,13 +18,17 @@ namespace halfcraft
 	/// how many player slots the server has (gpGlobals->maxClients): entities 1 to that are players.
 	int player_slots();
 
-	/// the player entity in a slot, while its client is connected (CBasePlayer::IsConnected: one that is
-	/// disconnecting still is).
+	/// the player entity in a slot, while it has one. a client that leaves takes its entity with it: once the engine
+	/// drops the client, UTIL_PlayerByIndex gives nullptr for its slot (in game, 3 s after a guest's disconnect the
+	/// slot had no entity and hc_debug_players listed the host alone), whatever the sdk's ClientDisconnect says of
+	/// edicts that stay. CBasePlayer::IsConnected() is
+	/// checked too, but under this game's singleplayer rules it is always true: only CMultiplayRules'
+	/// ClientDisconnected marks a player disconnected.
 	/// @param index - its entity index, 1 to player_slots()
-	/// @return nullptr for an empty slot (no player entity yet, or none any more) or a client gone
+	/// @return nullptr for a slot without a player entity (no client in it, or none yet)
 	CBasePlayer* connected_player(int index);
 
-	/// fn(CBasePlayer&) for each connected player, in entity order from 1 to player_slots().
+	/// fn(CBasePlayer&) for each player connected_player gives, in entity order from 1 to player_slots().
 	template <class F>
 	void for_each_player(F&& fn)
 	{

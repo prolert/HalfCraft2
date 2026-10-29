@@ -25,6 +25,8 @@
 //            asks as the map loads, which tells a new game from a `map` typed into the console
 //   in level - whether the client still has a level's entities; the server changes the characters'
 //            model files only when it hasn't (hc_campaign_models.cpp)
+//   server in level - the one the other way, a server.dll export client.dll looks up: whether the
+//            server has a level; the client's hc_host waits for it to go before maxplayers (hc_coop.cpp)
 
 #include <cstdint>
 
@@ -150,4 +152,13 @@ namespace halfcraft
 	using ClientInLevelFn = int (*)();
 
 	inline constexpr char HC_CLIENT_IN_LEVEL_EXPORT[] = "HalfCraft_ClientInLevel";
+
+	/// client.dll -> server.dll, the one export server.dll has: whether this process's server has a level (from
+	/// its LevelInitPreEntity until its LevelShutdownPostEntity, which the engine's shutdown of the server runs
+	/// just before it marks it inactive). the engine refuses maxplayers while a server runs, and disconnect only
+	/// asks for the shutdown, so hc_host runs maxplayers once this says the level is gone.
+	/// @return nonzero: it has
+	using ServerInLevelFn = int (*)();
+
+	inline constexpr char HC_SERVER_IN_LEVEL_EXPORT[] = "HalfCraft_ServerInLevel";
 }
