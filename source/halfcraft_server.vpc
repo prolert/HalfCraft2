@@ -14,9 +14,11 @@ $Configuration
 	$Compiler
 	{
 		$AdditionalIncludeDirectories	"$BASE;$HALFCRAFTDIR\src;$HALFCRAFTPROTO"
-		$AdditionalOptions				"$BASE /std:c++17"
+		$AdditionalOptions				"$BASE /std:c++17"	[$WINDOWS]
 	}
 }
+
+$Include "$HALFCRAFTDIR\halfcraft_linux.vpc"	[$POSIX]
 
 $Project
 {
@@ -85,6 +87,7 @@ $Project
 				$File	"$HALFCRAFTDIR\src\core\hc_link_names.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_log.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_module.h"
+				$File	"$HALFCRAFTDIR\src\core\hc_platform.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_text.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_units.h"
 				$File	"$HALFCRAFTDIR\src\core\hc_collision.cpp" \
@@ -92,6 +95,7 @@ $Project
 						"$HALFCRAFTDIR\src\core\hc_link.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_log.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_module.cpp" \
+						"$HALFCRAFTDIR\src\core\hc_platform.cpp" \
 						"$HALFCRAFTDIR\src\core\hc_units.cpp"
 				{
 					$Configuration
